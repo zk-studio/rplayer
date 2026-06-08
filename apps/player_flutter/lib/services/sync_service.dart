@@ -73,7 +73,13 @@ void openAddSource(BuildContext context, AppStore store) {
 }
 
 void openPlayer(BuildContext context, AppStore store, MediaItem item) {
-  Navigator.of(context).push(MaterialPageRoute(builder: (_) => VideoPlayerPage(store: store, item: item)));
+  Navigator.of(context).push(
+    PageRouteBuilder<void>(
+      transitionDuration: Duration.zero,
+      reverseTransitionDuration: Duration.zero,
+      pageBuilder: (_, __, ___) => VideoPlayerPage(store: store, item: item),
+    ),
+  );
 }
 
 void showSnack(BuildContext context, String message) {
