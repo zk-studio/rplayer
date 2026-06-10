@@ -136,76 +136,85 @@ Future<void> showTmdbConfigDialog(BuildContext context, AppStore store) async {
   final token = TextEditingController(text: current.accessToken);
   final language = TextEditingController(text: current.language);
   final region = TextEditingController(text: current.region);
-  final apiBaseUrl = TextEditingController(text: current.apiBaseUrl);
   final proxyUrl = TextEditingController(text: current.proxyUrl);
+  var apiBaseUrl = selectedTmdbApiBaseUrl(current.apiBaseUrl);
 
   await showDialog<void>(
     context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('TMDB API'),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: token,
-              decoration: const InputDecoration(
-                labelText: 'Read Access Token',
-                helperText: 'TMDB 设置页里的 API Read Access Token',
+    builder: (context) => StatefulBuilder(
+      builder: (context, setDialogState) => AlertDialog(
+        title: const Text('TMDB API'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: token,
+                decoration: const InputDecoration(
+                  labelText: 'Read Access Token',
+                  helperText: 'TMDB 设置页里的 API Read Access Token',
+                ),
+                minLines: 1,
+                maxLines: 3,
               ),
-              minLines: 1,
-              maxLines: 3,
-            ),
-            TextField(
-              controller: language,
-              decoration: const InputDecoration(labelText: '语言'),
-            ),
-            TextField(
-              controller: region,
-              decoration: const InputDecoration(labelText: '地区'),
-            ),
-            TextField(
-              controller: apiBaseUrl,
-              decoration: const InputDecoration(
-                labelText: 'TMDB API 地址',
-                helperText: '默认 https://api.themoviedb.org/3',
+              TextField(
+                controller: language,
+                decoration: const InputDecoration(labelText: '语言'),
               ),
-            ),
-            TextField(
-              controller: proxyUrl,
-              decoration: const InputDecoration(
-                labelText: 'HTTP 代理',
-                helperText: '可选，例如 http://192.168.1.10:7890',
+              TextField(
+                controller: region,
+                decoration: const InputDecoration(labelText: '地区'),
               ),
-            ),
-          ],
+              DropdownButtonFormField<String>(
+                initialValue: apiBaseUrl,
+                decoration: const InputDecoration(labelText: 'TMDB API 地址'),
+                items: [
+                  for (final endpoint in tmdbApiEndpoints)
+                    DropdownMenuItem(
+                      value: endpoint.url,
+                      child: Text('${endpoint.label}  ${endpoint.url}'),
+                    ),
+                ],
+                onChanged: (value) {
+                  if (value == null) return;
+                  setDialogState(() => apiBaseUrl = value);
+                },
+              ),
+              TextField(
+                controller: proxyUrl,
+                decoration: const InputDecoration(
+                  labelText: 'HTTP 代理',
+                  helperText: '可选，例如 http://192.168.1.10:7890',
+                ),
+              ),
+            ],
+          ),
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              await store.setTmdbConfig(
+                TmdbConfig(
+                  accessToken: token.text.trim(),
+                  language: language.text.trim().isEmpty
+                      ? 'zh-CN'
+                      : language.text.trim(),
+                  region:
+                      region.text.trim().isEmpty ? 'CN' : region.text.trim(),
+                  apiBaseUrl: apiBaseUrl,
+                  proxyUrl: proxyUrl.text.trim(),
+                ),
+              );
+              if (context.mounted) Navigator.pop(context);
+            },
+            child: const Text('保存'),
+          ),
+        ],
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('取消'),
-        ),
-        FilledButton(
-          onPressed: () async {
-            await store.setTmdbConfig(
-              TmdbConfig(
-                accessToken: token.text.trim(),
-                language: language.text.trim().isEmpty
-                    ? 'zh-CN'
-                    : language.text.trim(),
-                region: region.text.trim().isEmpty ? 'CN' : region.text.trim(),
-                apiBaseUrl: apiBaseUrl.text.trim().isEmpty
-                    ? 'https://api.themoviedb.org/3'
-                    : apiBaseUrl.text.trim(),
-                proxyUrl: proxyUrl.text.trim(),
-              ),
-            );
-            if (context.mounted) Navigator.pop(context);
-          },
-          child: const Text('保存'),
-        ),
-      ],
     ),
   );
 }

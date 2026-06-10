@@ -13,8 +13,8 @@ class TmdbMetadataService {
 
   String get _baseUrl {
     final value = config.apiBaseUrl.trim();
-    if (value.isEmpty) return 'https://api.themoviedb.org/3';
-    return value.endsWith('/') ? value.substring(0, value.length - 1) : value;
+    if (value.isEmpty) return defaultTmdbApiBaseUrl;
+    return _normalizeBaseUrl(value);
   }
 
   Future<MediaMetadata?> lookup(MediaItem item) async {
@@ -405,7 +405,7 @@ class TmdbMetadataService {
     if (config.proxyUrl.trim().isNotEmpty) {
       _log('proxy configured: ${config.proxyUrl.trim()}');
     }
-    _log('Rust reqwest request on worker isolate');
+    _log('Rust reqwest request on worker isolate host=${uri.host}');
     final body = await RustCoreService.instance.tmdbGetJsonAsync(
       uri.toString(),
       config.accessToken.trim(),
@@ -424,5 +424,9 @@ class TmdbMetadataService {
     final token = config.accessToken.trim();
     if (token.length <= 10) return '***';
     return '${token.substring(0, 6)}...${token.substring(token.length - 4)}';
+  }
+
+  String _normalizeBaseUrl(String value) {
+    return value.endsWith('/') ? value.substring(0, value.length - 1) : value;
   }
 }

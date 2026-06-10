@@ -26,14 +26,20 @@ pub struct TmdbClient {
     http: Client,
     access_token: String,
     language: String,
+    api_base_url: String,
 }
 
 impl TmdbClient {
-    pub fn new(access_token: impl Into<String>, language: impl Into<String>) -> Self {
+    pub fn new(
+        access_token: impl Into<String>,
+        language: impl Into<String>,
+        api_base_url: impl Into<String>,
+    ) -> Self {
         Self {
             http: Client::new(),
             access_token: access_token.into(),
             language: language.into(),
+            api_base_url: normalize_base_url(api_base_url.into()),
         }
     }
 
@@ -44,7 +50,7 @@ impl TmdbClient {
     ) -> Result<Vec<TmdbSearchItem>> {
         let mut request = self
             .http
-            .get("https://api.themoviedb.org/3/search/movie")
+            .get(format!("{}/search/movie", self.api_base_url))
             .bearer_auth(&self.access_token)
             .query(&[
                 ("query", query.to_string()),
@@ -79,7 +85,7 @@ impl TmdbClient {
     pub async fn search_tv(&self, query: &str, year: Option<u16>) -> Result<Vec<TmdbSearchItem>> {
         let mut request = self
             .http
-            .get("https://api.themoviedb.org/3/search/tv")
+            .get(format!("{}/search/tv", self.api_base_url))
             .bearer_auth(&self.access_token)
             .query(&[
                 ("query", query.to_string()),
@@ -113,6 +119,10 @@ impl TmdbClient {
     pub fn poster_url(path: &str, size: &str) -> String {
         format!("https://image.tmdb.org/t/p/{size}{path}")
     }
+}
+
+fn normalize_base_url(value: String) -> String {
+    value.trim_end_matches('/').to_string()
 }
 
 #[derive(Debug, Deserialize)]

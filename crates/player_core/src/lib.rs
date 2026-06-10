@@ -85,20 +85,28 @@ pub extern "C" fn player_core_tmdb_get_json(
                 builder = builder.proxy(reqwest::Proxy::all(proxy_url.trim())?);
             }
             let client = builder.build()?;
-            let response = client
-                .get(url)
-                .bearer_auth(access_token.trim())
-                .header("accept", "application/json")
-                .send()
-                .await?;
-            let status = response.status();
-            let body = response.text().await?;
-            if !status.is_success() {
-                anyhow::bail!("TMDB {status}: {body}");
-            }
-            Ok(body)
+            tmdb_get_json_once(&client, &url, access_token.trim()).await
         })
     })
+}
+
+async fn tmdb_get_json_once(
+    client: &reqwest::Client,
+    url: &str,
+    access_token: &str,
+) -> anyhow::Result<String> {
+    let response = client
+        .get(url)
+        .bearer_auth(access_token)
+        .header("accept", "application/json")
+        .send()
+        .await?;
+    let status = response.status();
+    let body = response.text().await?;
+    if !status.is_success() {
+        anyhow::bail!("TMDB {status}: {body}");
+    }
+    Ok(body)
 }
 
 #[no_mangle]

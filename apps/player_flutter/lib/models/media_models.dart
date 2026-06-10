@@ -301,12 +301,45 @@ class MediaFolderGroup {
   final int latestPlayedAt;
 }
 
+class TmdbApiEndpoint {
+  const TmdbApiEndpoint({required this.label, required this.url});
+
+  final String label;
+  final String url;
+}
+
+const defaultTmdbApiBaseUrl = 'https://api.tmdb.org/3';
+
+const tmdbApiEndpoints = [
+  TmdbApiEndpoint(label: 'api.tmdb.org', url: defaultTmdbApiBaseUrl),
+  TmdbApiEndpoint(
+    label: 'api.themoviedb.org',
+    url: 'https://api.themoviedb.org/3',
+  ),
+];
+
+String normalizeTmdbApiBaseUrl(String value) {
+  final trimmed = value.trim();
+  final normalized = trimmed.endsWith('/')
+      ? trimmed.substring(0, trimmed.length - 1)
+      : trimmed;
+  if (normalized.isEmpty) return defaultTmdbApiBaseUrl;
+  return normalized;
+}
+
+String selectedTmdbApiBaseUrl(String value) {
+  final normalized = normalizeTmdbApiBaseUrl(value);
+  return tmdbApiEndpoints.any((endpoint) => endpoint.url == normalized)
+      ? normalized
+      : defaultTmdbApiBaseUrl;
+}
+
 class TmdbConfig {
   const TmdbConfig({
     this.accessToken = '',
     this.language = 'zh-CN',
     this.region = 'CN',
-    this.apiBaseUrl = 'https://api.themoviedb.org/3',
+    this.apiBaseUrl = defaultTmdbApiBaseUrl,
     this.proxyUrl = '',
   });
 
@@ -338,8 +371,7 @@ class TmdbConfig {
         accessToken: json['accessToken'] as String? ?? '',
         language: json['language'] as String? ?? 'zh-CN',
         region: json['region'] as String? ?? 'CN',
-        apiBaseUrl:
-            json['apiBaseUrl'] as String? ?? 'https://api.themoviedb.org/3',
+        apiBaseUrl: selectedTmdbApiBaseUrl(json['apiBaseUrl'] as String? ?? ''),
         proxyUrl: json['proxyUrl'] as String? ?? '',
       );
 
