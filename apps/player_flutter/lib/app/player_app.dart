@@ -1,4 +1,4 @@
-﻿part of 'package:player_flutter/main.dart';
+part of 'package:player_flutter/main.dart';
 
 class PlayerApp extends StatefulWidget {
   const PlayerApp({super.key});
@@ -24,6 +24,8 @@ class _PlayerAppState extends State<PlayerApp> {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF2E7AF6)),
         scaffoldBackgroundColor: Colors.white,
+        visualDensity: VisualDensity.compact,
+        textTheme: ThemeData.light().textTheme.apply(fontSizeFactor: 0.92),
         useMaterial3: true,
       ),
       home: AnimatedBuilder(

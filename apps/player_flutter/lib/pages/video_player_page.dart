@@ -20,6 +20,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   Timer? statusTimer;
   Timer? loadingHideTimer;
   Timer? loadingProgressTimer;
+  Timer? controlsHideTimer;
   Duration position = Duration.zero;
   Duration duration = Duration.zero;
   Duration? dragPreviewPosition;
@@ -148,6 +149,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
           buffering = false;
         });
         hideLoadingOverlay();
+        scheduleControlsAutoHide();
       }
     } catch (e) {
       if (automaticRetry && canRetryTransientCodec(e)) {
@@ -177,6 +179,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
     statusTimer?.cancel();
     loadingHideTimer?.cancel();
     loadingProgressTimer?.cancel();
+    controlsHideTimer?.cancel();
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
         overlays: SystemUiOverlay.values);
@@ -310,6 +313,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
 
   void beginSeekDrag(DragStartDetails details) {
     if (controlsLocked) return;
+    markControlsInteraction();
     dragDistance = 0;
     dragStartPosition = position;
     seekingByDrag = false;
@@ -338,10 +342,12 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
     if (target != null && duration > Duration.zero) {
       await player.seek(target);
     }
+    scheduleControlsAutoHide();
   }
 
   void togglePlayback() {
     if (controlsLocked) return;
+    markControlsInteraction();
     playing ? player.pause() : player.play();
   }
 
@@ -356,14 +362,36 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
     if (controlsLocked) return;
     final next = !fullscreen;
     setStateIfMounted(() => fullscreen = next);
+    if (next) {
+      controlsHideTimer?.cancel();
+    } else {
+      scheduleControlsAutoHide();
+    }
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  }
+
+  void scheduleControlsAutoHide() {
+    controlsHideTimer?.cancel();
+    if (fullscreen || controlsLocked || episodePanelOpen) return;
+    controlsHideTimer = Timer(const Duration(seconds: 5), () {
+      if (!mounted || controlsLocked || episodePanelOpen) return;
+      setState(() => fullscreen = true);
+    });
+  }
+
+  void markControlsInteraction() {
+    if (!fullscreen && !controlsLocked && !episodePanelOpen) {
+      scheduleControlsAutoHide();
+    }
   }
 
   void setFitMode(VideoFitMode value) {
     setStateIfMounted(() => fitMode = value);
+    scheduleControlsAutoHide();
   }
 
   Future<void> showFitModes() async {
+    controlsHideTimer?.cancel();
     Widget option(VideoFitMode mode, String label) {
       final selected = fitMode == mode;
       return ListTile(
@@ -394,6 +422,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
       ),
     );
     if (selected != null) setFitMode(selected);
+    if (selected == null) scheduleControlsAutoHide();
   }
 
   void startStatusTimer() {
@@ -449,6 +478,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   Future<void> seekRelative(int seconds) async {
     if (controlsLocked) return;
     if (duration == Duration.zero) return;
+    markControlsInteraction();
     final nextMs = (position.inMilliseconds + seconds * 1000)
         .clamp(0, duration.inMilliseconds);
     await player.seek(Duration(milliseconds: nextMs));
@@ -456,6 +486,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
 
   Future<void> rotateScreen(BuildContext context) async {
     if (controlsLocked) return;
+    markControlsInteraction();
     final size = MediaQuery.sizeOf(context);
     final landscape = size.width > size.height;
     orientationLocked = true;
@@ -468,30 +499,45 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   }
 
   void toggleLock() {
+    final unlocking = controlsLocked;
     setStateIfMounted(() {
       controlsLocked = !controlsLocked;
       if (controlsLocked) {
+        controlsHideTimer?.cancel();
         fullscreen = true;
         episodePanelOpen = false;
         dragPreviewPosition = null;
         seekingByDrag = false;
       } else {
         fullscreen = false;
+        scheduleControlsAutoHide();
       }
     });
+    if (unlocking) scheduleControlsAutoHide();
+  }
+
+  void openEpisodePanel() {
+    if (controlsLocked) return;
+    controlsHideTimer?.cancel();
+    setStateIfMounted(() => episodePanelOpen = true);
+  }
+
+  void closeEpisodePanel() {
+    setStateIfMounted(() => episodePanelOpen = false);
+    scheduleControlsAutoHide();
   }
 
   Widget controlIconButton({
     required IconData icon,
     required VoidCallback onPressed,
-    double size = 28,
+    double size = 24,
   }) {
     return IconButton(
       color: Colors.white,
       onPressed: onPressed,
       icon: shadowIcon(icon, size: size),
       padding: EdgeInsets.zero,
-      constraints: const BoxConstraints.tightFor(width: 42, height: 42),
+      constraints: const BoxConstraints.tightFor(width: 38, height: 38),
     );
   }
 
@@ -512,6 +558,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   }
 
   Future<void> showAudioTracks() async {
+    controlsHideTimer?.cancel();
     final tracks = availableTracks.audio;
     final selected = await showModalBottomSheet<AudioTrack>(
       context: context,
@@ -538,9 +585,11 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
       ),
     );
     if (selected != null) await player.setAudioTrack(selected);
+    scheduleControlsAutoHide();
   }
 
   Future<void> showSubtitleTracks() async {
+    controlsHideTimer?.cancel();
     final tracks = availableTracks.subtitle;
     final selected = await showModalBottomSheet<SubtitleTrack>(
       context: context,
@@ -567,6 +616,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
       ),
     );
     if (selected != null) await player.setSubtitleTrack(selected);
+    scheduleControlsAutoHide();
   }
 
   List<MediaItem> get episodeItems {
@@ -583,9 +633,10 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
 
   Future<void> playEpisode(MediaItem item) async {
     if (item.id == currentItem.id) {
-      setStateIfMounted(() => episodePanelOpen = false);
+      closeEpisodePanel();
       return;
     }
+    controlsHideTimer?.cancel();
     await widget.store.updateProgress(currentItem.id, position, duration);
     setStateIfMounted(() {
       currentItem = item;
@@ -642,16 +693,16 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
             ],
           ),
           child: SizedBox(
-            width: 70,
-            height: 70,
+            width: 62,
+            height: 62,
             child: Stack(
               alignment: Alignment.center,
               children: [
                 const SizedBox(
-                  width: 58,
-                  height: 58,
+                  width: 50,
+                  height: 50,
                   child: CircularProgressIndicator(
-                    strokeWidth: 5,
+                    strokeWidth: 4,
                     strokeCap: StrokeCap.round,
                     color: Colors.white,
                   ),
@@ -659,7 +710,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
                 Text('$percent%',
                     style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 13,
+                        fontSize: 12,
                         fontWeight: FontWeight.w700,
                         shadows: [
                           Shadow(color: Color(0xCC000000), blurRadius: 8)
@@ -725,19 +776,19 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
           child: Row(
             children: [
               SizedBox(
-                  width: isLandscape ? 120 : 58,
+                  width: isLandscape ? 110 : 54,
                   child: statusText(clockText,
-                      size: isLandscape ? 15 : 13, weight: FontWeight.w700)),
+                      size: isLandscape ? 14 : 12, weight: FontWeight.w700)),
               const Spacer(),
               if (isLandscape) ...[
-                statusText(networkSpeed, size: 13),
-                const SizedBox(width: 12),
+                statusText(networkSpeed, size: 12),
+                const SizedBox(width: 10),
               ],
               shadowIcon(Icons.signal_cellular_alt,
-                  size: isLandscape ? 18 : 15),
+                  size: isLandscape ? 16 : 14),
               const SizedBox(width: 6),
               statusText(network,
-                  size: isLandscape ? 14 : 12, weight: FontWeight.w700),
+                  size: isLandscape ? 13 : 11, weight: FontWeight.w700),
               const SizedBox(width: 8),
               buildBatteryIndicator(),
             ],
@@ -757,10 +808,10 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
           IconButton(
             color: Colors.white,
             onPressed: () => Navigator.of(context).maybePop(),
-            icon: shadowIcon(Icons.chevron_left, size: isLandscape ? 34 : 28),
+            icon: shadowIcon(Icons.chevron_left, size: isLandscape ? 30 : 24),
             padding: EdgeInsets.zero,
             constraints: BoxConstraints.tightFor(
-                width: isLandscape ? 48 : 40, height: isLandscape ? 48 : 40),
+                width: isLandscape ? 42 : 36, height: isLandscape ? 42 : 36),
           ),
           Expanded(
             child: Text(
@@ -769,7 +820,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
                   color: Colors.white,
-                  fontSize: isLandscape ? 22 : 16,
+                  fontSize: isLandscape ? 18 : 14,
                   fontWeight: FontWeight.w700,
                   shadows: controlShadows),
             ),
@@ -785,19 +836,19 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
       controlIconButton(
           icon: Icons.screen_rotation_alt_outlined,
           onPressed: () => rotateScreen(context),
-          size: isLandscape ? 28 : 24),
+          size: isLandscape ? 24 : 21),
       controlIconButton(
           icon: Icons.fit_screen_outlined,
           onPressed: showFitModes,
-          size: isLandscape ? 28 : 24),
+          size: isLandscape ? 24 : 21),
     ];
     return Positioned(
       left: isLandscape ? 32 : 10,
       top: isLandscape ? math.max(96, constraints.maxHeight * 0.35) : 76,
       child: isLandscape
           ? Column(
-              children: [buttons[0], const SizedBox(height: 34), buttons[1]])
-          : Row(children: [buttons[0], const SizedBox(width: 8), buttons[1]]),
+              children: [buttons[0], const SizedBox(height: 28), buttons[1]])
+          : Row(children: [buttons[0], const SizedBox(width: 6), buttons[1]]),
     );
   }
 
@@ -810,7 +861,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
       child: controlIconButton(
         icon: controlsLocked ? Icons.lock_outline : Icons.lock_open_outlined,
         onPressed: toggleLock,
-        size: isLandscape ? 30 : 25,
+        size: isLandscape ? 26 : 22,
       ),
     );
   }
@@ -825,7 +876,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
         children: [
           Positioned.fill(
             child: GestureDetector(
-              onTap: () => setStateIfMounted(() => episodePanelOpen = false),
+              onTap: closeEpisodePanel,
               child: const ColoredBox(color: Color(0x66000000)),
             ),
           ),
@@ -835,7 +886,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
               width: panelWidth,
               height: double.infinity,
               padding: EdgeInsets.fromLTRB(
-                  isLandscape ? 22 : 16, 18, isLandscape ? 30 : 16, 20),
+                  isLandscape ? 18 : 14, 16, isLandscape ? 24 : 14, 18),
               decoration: const BoxDecoration(
                 color: Color(0xE81F1F24),
                 border: Border(left: BorderSide(color: Color(0x55FFFFFF))),
@@ -848,13 +899,13 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
                     Text('第 1 季（共 ${items.length} 集）',
                         style: TextStyle(
                             color: Colors.white70,
-                            fontSize: isLandscape ? 15 : 13)),
-                    SizedBox(height: isLandscape ? 28 : 16),
+                            fontSize: isLandscape ? 14 : 12)),
+                    SizedBox(height: isLandscape ? 22 : 14),
                     Expanded(
                       child: ListView.separated(
                         itemCount: items.length,
                         separatorBuilder: (_, __) =>
-                            SizedBox(height: isLandscape ? 12 : 8),
+                            SizedBox(height: isLandscape ? 10 : 7),
                         itemBuilder: (context, index) {
                           final item = items[index];
                           final selected = item.id == currentItem.id;
@@ -863,8 +914,8 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
                             onTap: () => playEpisode(item),
                             child: Container(
                               padding: EdgeInsets.symmetric(
-                                  horizontal: isLandscape ? 16 : 12,
-                                  vertical: isLandscape ? 15 : 11),
+                                  horizontal: isLandscape ? 14 : 10,
+                                  vertical: isLandscape ? 12 : 9),
                               decoration: BoxDecoration(
                                 color: selected
                                     ? const Color(0x22FFFFFF)
@@ -883,8 +934,8 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
                                           ? Icons.play_circle_fill
                                           : Icons.play_circle_outline,
                                       color: Colors.white,
-                                      size: 24),
-                                  const SizedBox(width: 12),
+                                      size: 21),
+                                  const SizedBox(width: 10),
                                   Expanded(
                                     child: Text(
                                       '${index + 1}. ${item.title}',
@@ -892,7 +943,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
                                       overflow: TextOverflow.ellipsis,
                                       style: TextStyle(
                                           color: Colors.white,
-                                          fontSize: isLandscape ? 18 : 14),
+                                          fontSize: isLandscape ? 15 : 13),
                                     ),
                                   ),
                                 ],
@@ -917,12 +968,12 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
       color: Colors.white,
       onPressed: () => seekRelative(seconds),
       padding: EdgeInsets.zero,
-      constraints: const BoxConstraints.tightFor(width: 44, height: 44),
+      constraints: const BoxConstraints.tightFor(width: 38, height: 38),
       icon: Stack(
         alignment: Alignment.center,
         children: [
           shadowIcon(seconds < 0 ? Icons.replay_10 : Icons.forward_10,
-              size: 40),
+              size: 34),
         ],
       ),
     );
@@ -933,10 +984,10 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
     final compact = !isLandscape || constraints.maxWidth < 740;
     final playButton = IconButton(
       color: Colors.white,
-      iconSize: compact ? 44 : 52,
+      iconSize: compact ? 38 : 46,
       padding: EdgeInsets.zero,
       constraints: BoxConstraints.tightFor(
-          width: compact ? 52 : 60, height: compact ? 52 : 60),
+          width: compact ? 46 : 54, height: compact ? 46 : 54),
       onPressed: togglePlayback,
       icon: Icon(playing ? Icons.pause : Icons.play_arrow,
           shadows: controlShadows),
@@ -944,15 +995,15 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
     final audioButton = controlIconButton(
         icon: Icons.graphic_eq,
         onPressed: showAudioTracks,
-        size: compact ? 27 : 31);
+        size: compact ? 23 : 27);
     final subtitleButton = controlIconButton(
         icon: Icons.closed_caption_outlined,
         onPressed: showSubtitleTracks,
-        size: compact ? 27 : 31);
+        size: compact ? 23 : 27);
     final episodeButton = controlIconButton(
       icon: Icons.format_list_bulleted_rounded,
-      onPressed: () => setStateIfMounted(() => episodePanelOpen = true),
-      size: compact ? 28 : 32,
+      onPressed: openEpisodePanel,
+      size: compact ? 24 : 28,
     );
 
     return Positioned(
@@ -969,7 +1020,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
                 SizedBox(
                     width: compact ? 48 : 78,
                     child: statusText(formatDuration(position),
-                        size: compact ? 12 : 18)),
+                        size: compact ? 11 : 15)),
                 Expanded(
                   child: SliderTheme(
                     data: SliderTheme.of(context).copyWith(
@@ -986,8 +1037,10 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
                       max: duration.inMilliseconds
                           .toDouble()
                           .clamp(1, double.infinity),
-                      onChanged: (value) =>
-                          player.seek(Duration(milliseconds: value.toInt())),
+                      onChanged: (value) {
+                        markControlsInteraction();
+                        player.seek(Duration(milliseconds: value.toInt()));
+                      },
                     ),
                   ),
                 ),
@@ -996,7 +1049,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
                   child: Align(
                       alignment: Alignment.centerRight,
                       child: statusText(formatDuration(duration),
-                          size: compact ? 12 : 18)),
+                          size: compact ? 11 : 15)),
                 ),
               ],
             ),
@@ -1019,8 +1072,8 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
                 spacing: 14,
                 runSpacing: 2,
                 children: [
-                  statusText('1.0x', size: 13),
-                  statusText(fitShortLabel, size: 13),
+                  statusText('1.0x', size: 12),
+                  statusText(fitShortLabel, size: 12),
                   audioButton,
                   subtitleButton,
                   episodeButton,
@@ -1029,9 +1082,9 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
             ] else
               Row(
                 children: [
-                  SizedBox(width: 66, child: statusText('1.0x', size: 16)),
+                  SizedBox(width: 60, child: statusText('1.0x', size: 14)),
                   SizedBox(
-                      width: 66, child: statusText(fitShortLabel, size: 16)),
+                      width: 60, child: statusText(fitShortLabel, size: 14)),
                   const Spacer(),
                   buildSeekButton(-10),
                   const SizedBox(width: 8),
@@ -1068,6 +1121,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
             onHorizontalDragCancel: () {
               seekingByDrag = false;
               setStateIfMounted(() => dragPreviewPosition = null);
+              scheduleControlsAutoHide();
             },
             onTap: toggleFullscreen,
             onDoubleTap: togglePlayback,
@@ -1112,7 +1166,7 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
                           formatDuration(dragPreviewPosition!),
                           style: const TextStyle(
                               color: Colors.white,
-                              fontSize: 18,
+                              fontSize: 15,
                               fontWeight: FontWeight.w600),
                         ),
                       ),

@@ -23,13 +23,232 @@ String parentPath(String value) {
   return '${trimmed.substring(0, index)}/';
 }
 
+bool looksLikeSeasonFolderName(String value) {
+  final text = value.trim();
+  if (text.isEmpty) return false;
+  return RegExp(r'^(season|s)\s*0?\d{1,2}$', caseSensitive: false)
+          .hasMatch(text) ||
+      RegExp(r'^第\s*\d{1,2}\s*季$').hasMatch(text) ||
+      RegExp(r'^(specials?|sp|特别篇|番外)$', caseSensitive: false).hasMatch(text);
+}
+
+String remoteParentName(String value) {
+  final parent = parentPath(value).trimRight();
+  return parent.split('/').where((part) => part.isNotEmpty).lastOrNull ?? '';
+}
+
+String? tmdbImageUrl(String? path, String size) {
+  if (path == null || path.isEmpty) return null;
+  final normalized = path.startsWith('/') ? path : '/$path';
+  return 'https://image.tmdb.org/t/p/$size$normalized';
+}
+
+String normalizeMatchText(String value) {
+  final buffer = StringBuffer();
+  var lastWasSpace = false;
+  for (final rune in value.toLowerCase().runes) {
+    if (_isMatchTextRune(rune)) {
+      buffer.writeCharCode(rune);
+      lastWasSpace = false;
+    } else if (!lastWasSpace) {
+      buffer.write(' ');
+      lastWasSpace = true;
+    }
+  }
+  return buffer.toString().trim();
+}
+
+bool _isMatchTextRune(int rune) {
+  return (rune >= 0x30 && rune <= 0x39) ||
+      (rune >= 0x61 && rune <= 0x7A) ||
+      (rune >= 0x4E00 && rune <= 0x9FFF) ||
+      (rune >= 0x3400 && rune <= 0x4DBF) ||
+      (rune >= 0xF900 && rune <= 0xFAFF);
+}
+
+String cleanTmdbHints(String value) {
+  return value
+      .replaceAll(
+        RegExp(r'(?:^|[^\w])tmdb(?:id)?\s*[-=]\s*\d+(?=$|[^\w])',
+            caseSensitive: false),
+        ' ',
+      )
+      .trim();
+}
+
+int? explicitTmdbIdFromText(String value) {
+  final match = RegExp(
+    r'(?:^|[^\w])tmdb(?:id)?\s*[-=]\s*(\d+)(?=$|[^\w])',
+    caseSensitive: false,
+  ).firstMatch(value);
+  return match == null ? null : int.tryParse(match.group(1)!);
+}
+
+int? explicitTmdbId(MediaItem item) {
+  for (final value in [
+    item.folderTitle,
+    item.title,
+    item.matchTitle,
+    item.uri,
+    item.id,
+  ]) {
+    final id = explicitTmdbIdFromText(value);
+    if (id != null) return id;
+  }
+  return null;
+}
+
+int? inferredEpisodeNumber(MediaItem item) {
+  if (item.episode != null) return item.episode;
+  final title = item.title.trim();
+  final seasonEpisode = RegExp(r'[Ss]\d{1,2}[Ee](\d{1,3})').firstMatch(title);
+  if (seasonEpisode != null) return int.tryParse(seasonEpisode.group(1)!);
+  final leading = RegExp(r'^0*(\d{1,3})(?:\D|$)').firstMatch(title);
+  if (leading == null) return null;
+  final value = int.tryParse(leading.group(1)!);
+  if (value == null || value <= 0) return null;
+  return value;
+}
+
+int? inferredSeasonNumber(MediaItem item) {
+  if (item.season != null) return item.season;
+  return inferredEpisodeNumber(item) == null ? null : 1;
+}
+
+bool looksLikeSeriesItem(MediaItem item) {
+  if (item.mediaKind == 'TvEpisode') return true;
+  if (item.season != null || item.episode != null) return true;
+  final folderTitle = mediaFolderTitle(item);
+  return folderTitle.isNotEmpty &&
+      normalizeMatchText(folderTitle) != normalizeMatchText(item.title) &&
+      inferredEpisodeNumber(item) != null;
+}
+
 String mediaFolderKey(MediaItem item) {
   if (item.type == SourceType.local) {
-    return '${item.sourceId}:local:${p.dirname(item.uri)}';
+    final dir = p.dirname(item.uri);
+    final folder = p.basename(dir);
+    final groupDir = looksLikeSeasonFolderName(folder) ? p.dirname(dir) : dir;
+    return '${item.sourceId}:local:$groupDir';
   }
   final uri = Uri.tryParse(item.uri);
   final path = uri == null ? item.uri : Uri.decodeComponent(uri.path);
-  return '${item.sourceId}:webdav:${parentPath(path)}';
+  final parent = parentPath(path);
+  final folder = remoteParentName(path);
+  final groupPath = looksLikeSeasonFolderName(folder)
+      ? parentPath(parent.substring(0, parent.length - 1))
+      : parent;
+  return '${item.sourceId}:webdav:$groupPath';
+}
+
+String mediaFolderTitle(MediaItem item) {
+  if (item.folderTitle.trim().isNotEmpty) return item.folderTitle.trim();
+  if (item.type == SourceType.local) {
+    return mediaSeriesTitleFromLocalPath(item.uri);
+  }
+  final uri = Uri.tryParse(item.uri);
+  final path = uri == null ? item.uri : Uri.decodeComponent(uri.path);
+  return mediaSeriesTitleFromRemotePath(path);
+}
+
+String mediaSeriesTitleFromLocalPath(String path) {
+  final dir = p.dirname(path);
+  final folder = p.basename(dir);
+  if (looksLikeSeasonFolderName(folder)) {
+    return p.basename(p.dirname(dir));
+  }
+  return folder;
+}
+
+String mediaSeriesTitleFromRemotePath(String path) {
+  final folder = remoteParentName(path);
+  if (!looksLikeSeasonFolderName(folder)) return folder;
+  final parent = parentPath(path);
+  final grandParent = parentPath(parent.substring(0, parent.length - 1));
+  return grandParent
+          .trimRight()
+          .split('/')
+          .where((part) => part.isNotEmpty)
+          .lastOrNull ??
+      folder;
+}
+
+String mediaIdentityFileName(MediaItem item) {
+  if (item.type == SourceType.local) {
+    return p.basename(item.uri);
+  }
+  final uri = Uri.tryParse(item.uri);
+  final path = uri == null ? item.uri : Uri.decodeComponent(uri.path);
+  final name = path.split('/').where((part) => part.isNotEmpty).lastOrNull;
+  return name == null || name.isEmpty ? item.title : name;
+}
+
+String mediaGroupDisplayTitle(MediaItem item) {
+  final title = mediaFolderTitle(item);
+  return cleanTmdbHints(title.isNotEmpty ? title : item.title);
+}
+
+String describeMediaItem(MediaItem item) {
+  final parts = <String>[
+    mediaGroupDisplayTitle(item),
+    mediaIdentityFileName(item),
+    'match=${item.matchTitle}',
+    'kind=${item.mediaKind}',
+    if (item.season != null) 'S${item.season}',
+    if (item.episode != null) 'E${item.episode}',
+  ];
+  return parts.where((part) => part.trim().isNotEmpty).join(' / ');
+}
+
+List<MediaFolderGroup> mediaFolderGroups(
+  Iterable<MediaItem> items, {
+  Map<String, int> lastPlayedAt = const {},
+}) {
+  final grouped = <String, List<MediaItem>>{};
+  for (final item in items) {
+    grouped.putIfAbsent(mediaFolderKey(item), () => []).add(item);
+  }
+
+  final groups = <MediaFolderGroup>[];
+  for (final entry in grouped.entries) {
+    final groupItems = [...entry.value]..sort(compareMediaItems);
+    final latestPlayed = groupItems.fold<int>(
+      0,
+      (latest, item) => math.max(latest, lastPlayedAt[item.id] ?? 0),
+    );
+    final representative = latestPlayed > 0
+        ? groupItems.reduce((a, b) =>
+            (lastPlayedAt[a.id] ?? 0) >= (lastPlayedAt[b.id] ?? 0) ? a : b)
+        : groupItems.first;
+    groups.add(MediaFolderGroup(
+      key: entry.key,
+      title: mediaGroupDisplayTitle(representative),
+      items: groupItems,
+      representative: representative,
+      latestPlayedAt: latestPlayed,
+    ));
+  }
+
+  groups.sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+  return groups;
+}
+
+int compareMediaItems(MediaItem a, MediaItem b) {
+  final episodeA = inferredEpisodeNumber(a);
+  final episodeB = inferredEpisodeNumber(b);
+  if (episodeA != null && episodeB != null && episodeA != episodeB) {
+    return episodeA.compareTo(episodeB);
+  }
+  return a.title.toLowerCase().compareTo(b.title.toLowerCase());
+}
+
+MediaMetadata? mediaGroupMetadata(
+    MediaFolderGroup group, Map<String, MediaMetadata> metadata) {
+  return metadata[group.representative.id] ??
+      group.items
+          .map((item) => metadata[item.id])
+          .whereType<MediaMetadata>()
+          .firstOrNull;
 }
 
 String formatDuration(Duration value) {

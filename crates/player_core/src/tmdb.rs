@@ -37,7 +37,11 @@ impl TmdbClient {
         }
     }
 
-    pub async fn search_movie(&self, query: &str, year: Option<u16>) -> Result<Vec<TmdbSearchItem>> {
+    pub async fn search_movie(
+        &self,
+        query: &str,
+        year: Option<u16>,
+    ) -> Result<Vec<TmdbSearchItem>> {
         let mut request = self
             .http
             .get("https://api.themoviedb.org/3/search/movie")
@@ -53,7 +57,8 @@ impl TmdbClient {
             request = request.query(&[("year", year.to_string())]);
         }
 
-        let response: MovieSearchResponse = request.send().await?.error_for_status()?.json().await?;
+        let response: MovieSearchResponse =
+            request.send().await?.error_for_status()?.json().await?;
         Ok(response
             .results
             .into_iter()
@@ -143,4 +148,3 @@ struct TvSearchResult {
     first_air_date: Option<String>,
     vote_average: Option<f32>,
 }
-

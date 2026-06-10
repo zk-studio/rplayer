@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ffi' as ffi;
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math' as math;
 
+import 'package:ffi/ffi.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -25,7 +28,9 @@ part 'pages/profile_page.dart';
 part 'pages/video_player_page.dart';
 part 'widgets/common_widgets.dart';
 part 'services/sync_service.dart';
+part 'services/rust_core_service.dart';
 part 'services/media_scan_service.dart';
+part 'services/tmdb_metadata_service.dart';
 part 'core/utils.dart';
 part 'models/media_models.dart';
 part 'services/webdav_client.dart';

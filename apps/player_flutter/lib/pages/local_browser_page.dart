@@ -33,30 +33,7 @@ class _LocalBrowserPageState extends State<LocalBrowserPage> {
       throw Exception(localAccessHelp(path));
     }
 
-    final entries = <LocalEntry>[];
-    try {
-      await for (final entity in dir.list(followLinks: false)) {
-        final stat = await entity.stat();
-        final isDir = stat.type == FileSystemEntityType.directory;
-        final isFile = stat.type == FileSystemEntityType.file;
-        if (!isDir && (!isFile || !isVideoName(entity.path))) continue;
-        entries.add(
-          LocalEntry(
-            name: p.basename(entity.path),
-            path: entity.path,
-            isDir: isDir,
-            size: isFile ? stat.size : null,
-          ),
-        );
-      }
-    } on FileSystemException catch (e) {
-      throw Exception(localAccessHelp(e.path ?? path));
-    }
-    entries.sort((a, b) {
-      if (a.isDir != b.isDir) return a.isDir ? -1 : 1;
-      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
-    });
-    return entries;
+    return RustCoreService.instance.listLocalDirectoryAsync(path);
   }
 
   void refresh([String? next]) {

@@ -29,15 +29,6 @@ android {
         versionName = flutter.versionName
     }
 
-    splits {
-        abi {
-            isEnable = true
-            reset()
-            include("arm64-v8a", "armeabi-v7a")
-            isUniversalApk = false
-        }
-    }
-
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.

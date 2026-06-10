@@ -8,8 +8,8 @@ class AppBrand extends StatelessWidget {
     return Row(
       children: [
         Container(
-          width: 34,
-          height: 34,
+          width: 30,
+          height: 30,
           decoration: BoxDecoration(
               color: const Color(0xFFFFD95C),
               borderRadius: BorderRadius.circular(8)),
@@ -17,7 +17,7 @@ class AppBrand extends StatelessWidget {
         ),
         const SizedBox(width: 8),
         const Text('爆米花播放器',
-            style: TextStyle(fontSize: 23, fontWeight: FontWeight.w800)),
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
       ],
     );
   }
@@ -26,67 +26,85 @@ class AppBrand extends StatelessWidget {
 class MediaTile extends StatelessWidget {
   const MediaTile(
       {required this.item,
+      required this.metadata,
       required this.progressMs,
       required this.onTap,
+      this.displayTitle,
+      this.itemCount = 1,
       super.key});
 
   final MediaItem item;
+  final MediaMetadata? metadata;
   final int progressMs;
   final VoidCallback onTap;
+  final String? displayTitle;
+  final int itemCount;
 
   @override
   Widget build(BuildContext context) {
     final remote = item.type == SourceType.webdav;
+    final imageUrl = metadata?.posterUrl;
+    final rating = metadata?.voteAverage;
     return InkWell(
       borderRadius: BorderRadius.circular(8),
       onTap: onTap,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: Container(
-              width: double.infinity,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8),
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: remote
-                      ? const [Color(0xFF78A7F7), Color(0xFF7DD6C4)]
-                      : const [Color(0xFFE9B36D), Color(0xFF8567C8)],
-                ),
-              ),
+          AspectRatio(
+            aspectRatio: 2 / 3,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  Icon(
-                      remote
-                          ? Icons.cloud_queue
-                          : Icons.movie_creation_outlined,
-                      size: 60,
-                      color: Colors.white70),
-                  const Center(
-                    child: CircleAvatar(
-                      radius: 24,
-                      backgroundColor: Color(0x88000000),
-                      child:
-                          Icon(Icons.play_arrow, color: Colors.white, size: 34),
+                  if (imageUrl != null)
+                    Image.network(
+                      imageUrl,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) =>
+                          MediaPosterFallback(remote: remote),
+                    )
+                  else
+                    MediaPosterFallback(remote: remote),
+                  if (rating != null && rating > 0)
+                    Positioned(
+                      right: 6,
+                      bottom: 6,
+                      child: Text(
+                        rating.toStringAsFixed(1),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                          shadows: [
+                            Shadow(color: Colors.black, blurRadius: 8),
+                          ],
+                        ),
+                      ),
                     ),
-                  ),
                 ],
               ),
             ),
           ),
           const SizedBox(height: 9),
-          Text(item.title,
+          Text(
+              metadata?.title.isNotEmpty == true
+                  ? metadata!.title
+                  : displayTitle ?? item.title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 16)),
+              style: const TextStyle(fontSize: 14)),
           const SizedBox(height: 3),
           Text(item.sourceName,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(color: Colors.grey)),
+          if (itemCount > 1)
+            Text('共 $itemCount 集',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.grey)),
         ],
       ),
     );
@@ -96,16 +114,22 @@ class MediaTile extends StatelessWidget {
 class RecentMediaTile extends StatelessWidget {
   const RecentMediaTile({
     required this.item,
+    required this.metadata,
     required this.progressMs,
     required this.durationMs,
     required this.onTap,
+    this.displayTitle,
+    this.itemCount = 1,
     super.key,
   });
 
   final MediaItem item;
+  final MediaMetadata? metadata;
   final int progressMs;
   final int durationMs;
   final VoidCallback onTap;
+  final String? displayTitle;
+  final int itemCount;
 
   double get progressValue {
     if (progressMs <= 0) return 0;
@@ -116,6 +140,7 @@ class RecentMediaTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final remote = item.type == SourceType.webdav;
+    final imageUrl = metadata?.stillUrl ?? metadata?.backdropUrl;
     final hasTime = progressMs > 0 || durationMs > 0;
     final timeText = durationMs > 0
         ? '${formatDuration(Duration(milliseconds: progressMs))}/${formatDuration(Duration(milliseconds: durationMs))}'
@@ -133,30 +158,21 @@ class RecentMediaTile extends StatelessWidget {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: remote
-                            ? const [Color(0xFF78A7F7), Color(0xFF7DD6C4)]
-                            : const [Color(0xFFE9B36D), Color(0xFF8567C8)],
-                      ),
-                    ),
-                    child: Icon(
-                      remote
-                          ? Icons.cloud_queue
-                          : Icons.movie_creation_outlined,
-                      size: 58,
-                      color: Colors.white70,
-                    ),
-                  ),
+                  if (imageUrl != null)
+                    Image.network(
+                      imageUrl,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) =>
+                          MediaPosterFallback(remote: remote),
+                    )
+                  else
+                    MediaPosterFallback(remote: remote),
                   const Center(
                     child: CircleAvatar(
-                      radius: 28,
+                      radius: 24,
                       backgroundColor: Color(0xAA000000),
                       child:
-                          Icon(Icons.play_arrow, color: Colors.white, size: 38),
+                          Icon(Icons.play_arrow, color: Colors.white, size: 32),
                     ),
                   ),
                   if (hasTime)
@@ -198,12 +214,41 @@ class RecentMediaTile extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            item.title,
+            displayTitle ??
+                (metadata?.title.isNotEmpty == true
+                    ? metadata!.title
+                    : item.title),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class MediaPosterFallback extends StatelessWidget {
+  const MediaPosterFallback({required this.remote, super.key});
+
+  final bool remote;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: remote
+              ? const [Color(0xFF78A7F7), Color(0xFF7DD6C4)]
+              : const [Color(0xFFE9B36D), Color(0xFF8567C8)],
+        ),
+      ),
+      child: Icon(
+        remote ? Icons.cloud_queue : Icons.movie_creation_outlined,
+        size: 48,
+        color: Colors.white70,
       ),
     );
   }
@@ -250,7 +295,7 @@ class SourceCard extends StatelessWidget {
                 Text(source.name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 18)),
+                    style: const TextStyle(fontSize: 16)),
                 const SizedBox(height: 5),
                 Text('${source.displayPath} · $count 个视频',
                     maxLines: 2,
@@ -293,8 +338,8 @@ class AddSourceTile extends StatelessWidget {
       decoration: BoxDecoration(
           color: Colors.white, borderRadius: BorderRadius.circular(8)),
       child: ListTile(
-        leading: Icon(icon, color: const Color(0xFF2E7AF6), size: 34),
-        title: Text(title, style: const TextStyle(fontSize: 18)),
+        leading: Icon(icon, color: const Color(0xFF2E7AF6), size: 28),
+        title: Text(title, style: const TextStyle(fontSize: 16)),
         trailing: const Icon(Icons.chevron_right),
         onTap: onTap,
       ),
@@ -328,13 +373,13 @@ class ProfileActionCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(8)),
       child: Row(
         children: [
-          Icon(icon, color: const Color(0xFF2E7AF6), size: 32),
+          Icon(icon, color: const Color(0xFF2E7AF6), size: 28),
           const SizedBox(width: 16),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, style: const TextStyle(fontSize: 18)),
+                Text(title, style: const TextStyle(fontSize: 16)),
                 const SizedBox(height: 5),
                 Text(subtitle,
                     maxLines: 2,
@@ -361,7 +406,7 @@ class SourceGroupTitle extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(2, 18, 0, 9),
       child: Text(title,
           style: const TextStyle(
-              fontSize: 13, color: Colors.grey, fontWeight: FontWeight.w600)),
+              fontSize: 12, color: Colors.grey, fontWeight: FontWeight.w600)),
     );
   }
 }
@@ -380,10 +425,10 @@ class SectionHeader extends StatelessWidget {
         children: [
           Text(title,
               style:
-                  const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+                  const TextStyle(fontSize: 19, fontWeight: FontWeight.w700)),
           const SizedBox(width: 6),
           Text('$count',
-              style: const TextStyle(fontSize: 17, color: Colors.grey)),
+              style: const TextStyle(fontSize: 15, color: Colors.grey)),
         ],
       ),
     );
@@ -410,11 +455,11 @@ class EmptyState extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(icon, size: 72, color: Colors.grey),
+          Icon(icon, size: 60, color: Colors.grey),
           const SizedBox(height: 18),
           Text(title,
               style:
-                  const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+                  const TextStyle(fontSize: 19, fontWeight: FontWeight.w700)),
           const SizedBox(height: 10),
           Text(message,
               textAlign: TextAlign.center,
@@ -449,7 +494,7 @@ class ErrorView extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(Icons.error_outline,
-                size: 48, color: dark ? Colors.white70 : Colors.red),
+                size: 40, color: dark ? Colors.white70 : Colors.red),
             const SizedBox(height: 12),
             Text(message,
                 textAlign: TextAlign.center,

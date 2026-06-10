@@ -1,4 +1,4 @@
-﻿part of 'package:player_flutter/main.dart';
+part of 'package:player_flutter/main.dart';
 
 class ProfilePage extends StatelessWidget {
   const ProfilePage({required this.store, super.key});
@@ -8,6 +8,13 @@ class ProfilePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final sync = store.syncConfig;
+    final tmdb = store.tmdbConfig;
+    final tmdbStatus = store.metadataRefreshing
+        ? '正在匹配 TMDB 信息...'
+        : store.tmdbLastStatus.isNotEmpty
+            ? store.tmdbLastStatus
+            : '刷新海报、背景图、剧集封面和演员信息';
+
     return SafeArea(
       bottom: false,
       child: ListView(
@@ -15,19 +22,33 @@ class ProfilePage extends StatelessWidget {
           Container(
             padding: const EdgeInsets.fromLTRB(22, 34, 22, 30),
             decoration: const BoxDecoration(
-              gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0xFFDCEEFF), Colors.white]),
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Color(0xFFDCEEFF), Colors.white],
+              ),
             ),
             child: Column(
               children: [
                 const CircleAvatar(
-                  radius: 56,
+                  radius: 48,
                   backgroundColor: Color(0xFFAFC7F7),
-                  child: Icon(Icons.cloud_sync_outlined, color: Colors.white, size: 58),
+                  child: Icon(
+                    Icons.cloud_sync_outlined,
+                    color: Colors.white,
+                    size: 48,
+                  ),
                 ),
                 const SizedBox(height: 22),
-                const Text('配置同步', style: TextStyle(fontSize: 25, fontWeight: FontWeight.w700)),
+                const Text(
+                  '配置同步',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
+                ),
                 const SizedBox(height: 6),
-                Text(sync == null ? '未设置同步 WebDAV' : sync.baseUrl, style: const TextStyle(color: Colors.grey)),
+                Text(
+                  sync == null ? '未设置同步 WebDAV' : sync.baseUrl,
+                  style: const TextStyle(color: Colors.grey),
+                ),
               ],
             ),
           ),
@@ -36,9 +57,54 @@ class ProfilePage extends StatelessWidget {
             child: Column(
               children: [
                 ProfileActionCard(
+                  icon: Icons.image_search_outlined,
+                  title: 'TMDB API',
+                  subtitle: tmdb.enabled
+                      ? '已配置，${tmdb.language} / ${tmdb.region}'
+                      : '获取影片信息、竖版海报和剧集封面',
+                  actionText: tmdb.enabled ? '编辑' : '设置',
+                  onTap: () => showTmdbConfigDialog(context, store),
+                ),
+                ProfileActionCard(
+                  icon: Icons.auto_awesome_motion_outlined,
+                  title: '刷新影片信息',
+                  subtitle: tmdbStatus,
+                  actionText: store.metadataRefreshing ? '进行中' : '刷新',
+                  onTap: () {
+                    if (!store.tmdbConfig.enabled) {
+                      showSnack(context, '请先设置 TMDB API Token');
+                      return;
+                    }
+                    unawaited(store.refreshMissingMetadata(force: true));
+                  },
+                ),
+                ProfileActionCard(
+                  icon: Icons.content_copy_outlined,
+                  title: '复制诊断日志',
+                  subtitle: '复制最近 ${store.diagnosticLogs.length} 条 TMDB 和扫描日志',
+                  actionText: '复制',
+                  onTap: () async {
+                    await Clipboard.setData(
+                      ClipboardData(text: store.exportDiagnosticLogs()),
+                    );
+                    if (context.mounted) showSnack(context, '诊断日志已复制');
+                  },
+                ),
+                ProfileActionCard(
+                  icon: Icons.delete_sweep_outlined,
+                  title: '清空诊断日志',
+                  subtitle: '清空本机保存的调试日志',
+                  actionText: '清空',
+                  onTap: () async {
+                    await store.clearDiagnosticLogs();
+                    if (context.mounted) showSnack(context, '诊断日志已清空');
+                  },
+                ),
+                ProfileActionCard(
                   icon: Icons.settings_outlined,
                   title: '同步 WebDAV',
-                  subtitle: sync == null ? '单独配置用于备份整个 App 状态' : sync.configPath,
+                  subtitle:
+                      sync == null ? '单独配置用于备份整个 App 状态' : sync.configPath,
                   actionText: sync == null ? '设置' : '编辑',
                   onTap: () => showSyncConfigDialog(context, store),
                 ),
@@ -63,4 +129,83 @@ class ProfilePage extends StatelessWidget {
       ),
     );
   }
+}
+
+Future<void> showTmdbConfigDialog(BuildContext context, AppStore store) async {
+  final current = store.tmdbConfig;
+  final token = TextEditingController(text: current.accessToken);
+  final language = TextEditingController(text: current.language);
+  final region = TextEditingController(text: current.region);
+  final apiBaseUrl = TextEditingController(text: current.apiBaseUrl);
+  final proxyUrl = TextEditingController(text: current.proxyUrl);
+
+  await showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('TMDB API'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: token,
+              decoration: const InputDecoration(
+                labelText: 'Read Access Token',
+                helperText: 'TMDB 设置页里的 API Read Access Token',
+              ),
+              minLines: 1,
+              maxLines: 3,
+            ),
+            TextField(
+              controller: language,
+              decoration: const InputDecoration(labelText: '语言'),
+            ),
+            TextField(
+              controller: region,
+              decoration: const InputDecoration(labelText: '地区'),
+            ),
+            TextField(
+              controller: apiBaseUrl,
+              decoration: const InputDecoration(
+                labelText: 'TMDB API 地址',
+                helperText: '默认 https://api.themoviedb.org/3',
+              ),
+            ),
+            TextField(
+              controller: proxyUrl,
+              decoration: const InputDecoration(
+                labelText: 'HTTP 代理',
+                helperText: '可选，例如 http://192.168.1.10:7890',
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () async {
+            await store.setTmdbConfig(
+              TmdbConfig(
+                accessToken: token.text.trim(),
+                language: language.text.trim().isEmpty
+                    ? 'zh-CN'
+                    : language.text.trim(),
+                region: region.text.trim().isEmpty ? 'CN' : region.text.trim(),
+                apiBaseUrl: apiBaseUrl.text.trim().isEmpty
+                    ? 'https://api.themoviedb.org/3'
+                    : apiBaseUrl.text.trim(),
+                proxyUrl: proxyUrl.text.trim(),
+              ),
+            );
+            if (context.mounted) Navigator.pop(context);
+          },
+          child: const Text('保存'),
+        ),
+      ],
+    ),
+  );
 }

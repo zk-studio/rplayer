@@ -20,14 +20,30 @@ pub struct MediaIdentity {
 pub fn parse_media_identity(folder_name: &str, file_name: &str) -> MediaIdentity {
     let basename = strip_extension(file_name);
     let raw_title = format!("{folder_name} {basename}");
-    let tokens = tokenize(&raw_title);
-    let year = parse_year(&tokens);
-    let (season, episode) = parse_season_episode(&raw_title);
+    let raw_tokens = tokenize(&raw_title);
+    let year = parse_year(&raw_tokens);
+    let (mut season, mut episode) = parse_season_episode(&raw_title);
+    let inferred_episode = season.is_none()
+        && episode.is_none()
+        && !folder_name.trim().is_empty()
+        && infer_episode_from_numeric_basename(basename).is_some();
 
-    let normalized_title = tokens
+    if inferred_episode {
+        season = Some(1);
+        episode = infer_episode_from_numeric_basename(basename);
+    }
+
+    let title_source = if inferred_episode {
+        folder_name
+    } else {
+        raw_title.as_str()
+    };
+
+    let normalized_title = tokenize(title_source)
         .into_iter()
         .filter(|token| !is_noise_token(token))
         .filter(|token| parse_year(&[token.to_string()]).is_none())
+        .filter(|token| !is_episode_token(token))
         .collect::<Vec<_>>()
         .join(" ")
         .trim()
@@ -52,7 +68,10 @@ pub fn parse_media_identity(folder_name: &str, file_name: &str) -> MediaIdentity
 }
 
 fn strip_extension(file_name: &str) -> &str {
-    file_name.rsplit_once('.').map(|(name, _)| name).unwrap_or(file_name)
+    file_name
+        .rsplit_once('.')
+        .map(|(name, _)| name)
+        .unwrap_or(file_name)
 }
 
 fn tokenize(input: &str) -> Vec<String> {
@@ -106,6 +125,25 @@ fn parse_one_or_two_digits(input: &str) -> (Option<u16>, usize) {
     (digits.parse::<u16>().ok(), consumed)
 }
 
+fn infer_episode_from_numeric_basename(input: &str) -> Option<u16> {
+    let digits = input
+        .trim_start()
+        .chars()
+        .take(3)
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    let value = digits.parse::<u16>().ok()?;
+    (1..=999).contains(&value).then_some(value)
+}
+
+fn is_episode_token(token: &str) -> bool {
+    let lower = token.to_ascii_lowercase();
+    if lower.starts_with('s') && lower.contains('e') {
+        return true;
+    }
+    false
+}
+
 fn is_noise_token(token: &str) -> bool {
     matches!(
         token.to_ascii_lowercase().as_str(),
@@ -138,7 +176,8 @@ mod tests {
 
     #[test]
     fn parses_movie_title() {
-        let identity = parse_media_identity("Inception (2010)", "Inception.2010.1080p.BluRay.x265.mkv");
+        let identity =
+            parse_media_identity("Inception (2010)", "Inception.2010.1080p.BluRay.x265.mkv");
 
         assert_eq!(identity.year, Some(2010));
         assert_eq!(identity.kind, MediaKind::Movie);
@@ -159,6 +198,26 @@ mod tests {
         let identity = parse_media_identity("Show", "Show.S1E2.mkv");
 
         assert_eq!(identity.kind, MediaKind::TvEpisode);
+        assert_eq!(identity.season, Some(1));
+        assert_eq!(identity.episode, Some(2));
+    }
+
+    #[test]
+    fn infers_episode_from_numeric_file_in_series_folder() {
+        let identity = parse_media_identity("Example Show", "01~4K.mp4");
+
+        assert_eq!(identity.kind, MediaKind::TvEpisode);
+        assert_eq!(identity.normalized_title, "Example Show");
+        assert_eq!(identity.season, Some(1));
+        assert_eq!(identity.episode, Some(1));
+    }
+
+    #[test]
+    fn infers_episode_from_plain_numeric_file_in_series_folder() {
+        let identity = parse_media_identity("Example Show", "2.mp4");
+
+        assert_eq!(identity.kind, MediaKind::TvEpisode);
+        assert_eq!(identity.normalized_title, "Example Show");
         assert_eq!(identity.season, Some(1));
         assert_eq!(identity.episode, Some(2));
     }

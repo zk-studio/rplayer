@@ -9,15 +9,29 @@ use std::os::raw::c_char;
 
 pub use danmu::{DanmuClient, DanmuEvent, DanmuMatchRequest};
 pub use media::{parse_media_identity, MediaIdentity, MediaKind};
-pub use scanner::{scan_local_videos, scan_local_videos_json, ScannedVideo};
+pub use scanner::{
+    list_local_directory, list_local_directory_json, scan_local_videos, scan_local_videos_json,
+    LocalDirectoryEntry, ScannedVideo,
+};
 pub use tmdb::{TmdbClient, TmdbMediaType, TmdbSearchItem};
-pub use webdav::{RemoteEntry, WebdavClient, WebdavConfig};
+pub use webdav::{
+    parse_webdav_entries, parse_webdav_entries_json, RemoteEntry, WebdavClient, WebdavConfig,
+    WebdavDirectoryEntry,
+};
 
 #[no_mangle]
 pub extern "C" fn player_core_scan_local_videos_json(root: *const c_char) -> *mut c_char {
     ffi_result(|| {
         let root = read_c_string(root)?;
         scan_local_videos_json(&root)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn player_core_list_local_directory_json(root: *const c_char) -> *mut c_char {
+    ffi_result(|| {
+        let root = read_c_string(root)?;
+        list_local_directory_json(&root)
     })
 }
 
@@ -31,6 +45,59 @@ pub extern "C" fn player_core_parse_media_identity_json(
         let file_name = read_c_string(file_name)?;
         serde_json::to_string(&parse_media_identity(&folder_name, &file_name))
             .map_err(anyhow::Error::from)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn player_core_parse_webdav_entries_json(
+    body: *const c_char,
+    base_url: *const c_char,
+    request_url: *const c_char,
+    current_path: *const c_char,
+) -> *mut c_char {
+    ffi_result(|| {
+        let body = read_c_string(body)?;
+        let base_url = read_c_string(base_url)?;
+        let request_url = read_c_string(request_url)?;
+        let current_path = read_c_string(current_path)?;
+        parse_webdav_entries_json(&body, &base_url, &request_url, &current_path)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn player_core_tmdb_get_json(
+    url: *const c_char,
+    access_token: *const c_char,
+    proxy_url: *const c_char,
+) -> *mut c_char {
+    ffi_result(|| {
+        let url = read_c_string(url)?;
+        let access_token = read_c_string(access_token)?;
+        let proxy_url = read_c_string(proxy_url)?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        runtime.block_on(async move {
+            let mut builder = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(8))
+                .user_agent("player_flutter/0.1");
+            if !proxy_url.trim().is_empty() {
+                builder = builder.proxy(reqwest::Proxy::all(proxy_url.trim())?);
+            }
+            let client = builder.build()?;
+            let response = client
+                .get(url)
+                .bearer_auth(access_token.trim())
+                .header("accept", "application/json")
+                .send()
+                .await?;
+            let status = response.status();
+            let body = response.text().await?;
+            if !status.is_success() {
+                anyhow::bail!("TMDB {status}: {body}");
+            }
+            Ok(body)
+        })
     })
 }
 
@@ -77,5 +144,7 @@ fn ffi_result(run: impl FnOnce() -> anyhow::Result<String>) -> *mut c_char {
             "{{\"ok\":false,\"data\":null,\"error\":\"failed to serialize ffi response: {error}\"}}"
         )
     });
-    CString::new(json).expect("json response must not contain nul").into_raw()
+    CString::new(json)
+        .expect("json response must not contain nul")
+        .into_raw()
 }

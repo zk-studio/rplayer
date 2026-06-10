@@ -4,7 +4,9 @@ class MediaScanService {
   const MediaScanService();
 
   Future<List<MediaItem>> scanSource(MediaSourceConfig source) {
-    return source.type == SourceType.local ? scanLocalDirectory(source) : scanWebdavSelections(source);
+    return source.type == SourceType.local
+        ? scanLocalDirectory(source)
+        : scanWebdavSelections(source);
   }
 
   Future<List<MediaItem>> scanLocalDirectory(MediaSourceConfig source) async {
@@ -15,25 +17,23 @@ class MediaScanService {
     return items;
   }
 
-  Future<List<MediaItem>> scanLocalPath(MediaSourceConfig source, String path) async {
-    // Rust handoff point: player_core::scan_local_videos already provides this
-    // traversal in Rust; the platform FFI bridge can replace only this method.
+  Future<List<MediaItem>> scanLocalPath(
+      MediaSourceConfig source, String path) async {
     final items = <MediaItem>[];
     final file = File(path);
     if (await file.exists()) {
-      if (isVideoName(path)) items.add(MediaItem.local(source: source, path: path));
+      if (isVideoName(path)) {
+        items.add(MediaItem.local(source: source, path: path));
+      }
       return items;
     }
 
     final dir = Directory(path);
     if (!await dir.exists()) return [];
 
-    await for (final entity in dir.list(recursive: true, followLinks: false)) {
-      if (entity is File && isVideoName(entity.path)) {
-        items.add(MediaItem.local(source: source, path: entity.path));
-      }
-    }
-    return items;
+    return (await RustCoreService.instance.scanLocalVideosAsync(path))
+        .map((video) => MediaItem.local(source: source, path: video.path))
+        .toList();
   }
 
   Future<List<MediaItem>> scanWebdavSelections(MediaSourceConfig source) async {
@@ -42,10 +42,13 @@ class MediaScanService {
     for (final path in source.selectedPaths) {
       if (path.endsWith('/')) {
         final entries = await client.scanVideos(path, maxDepth: 8);
-        items.addAll(entries.map((entry) => MediaItem.webdav(source: source, entry: entry)));
+        items.addAll(entries
+            .map((entry) => MediaItem.webdav(source: source, entry: entry)));
       } else if (isVideoName(path)) {
         final entry = await client.findFile(path);
-        if (entry != null) items.add(MediaItem.webdav(source: source, entry: entry));
+        if (entry != null) {
+          items.add(MediaItem.webdav(source: source, entry: entry));
+        }
       }
     }
     return items;

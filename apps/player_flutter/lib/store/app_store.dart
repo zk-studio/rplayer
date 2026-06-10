@@ -10,8 +10,13 @@ class AppStore extends ChangeNotifier {
   final Map<String, int> durations = {};
   final Map<String, int> lastPlayedAt = {};
   final Map<String, String> folderOrientations = {};
+  final Map<String, MediaMetadata> metadata = {};
+  TmdbConfig tmdbConfig = const TmdbConfig();
   SyncConfig? syncConfig;
   bool loaded = false;
+  bool metadataRefreshing = false;
+  String tmdbLastStatus = '';
+  final List<String> diagnosticLogs = [];
 
   Future<File> get configFile async {
     var path = Directory.systemTemp.path;
@@ -36,6 +41,7 @@ class AppStore extends ChangeNotifier {
     }
     loaded = true;
     notifyListeners();
+    unawaited(refreshMissingMetadata());
   }
 
   Future<void> save() async {
@@ -54,7 +60,10 @@ class AppStore extends ChangeNotifier {
       'durations': durations,
       'lastPlayedAt': lastPlayedAt,
       'folderOrientations': folderOrientations,
+      'metadata': metadata.map((key, value) => MapEntry(key, value.toJson())),
+      'tmdbConfig': tmdbConfig.toJson(),
       'syncConfig': syncConfig?.toJson(),
+      'diagnosticLogs': diagnosticLogs,
     });
   }
 
@@ -71,7 +80,8 @@ class AppStore extends ChangeNotifier {
       ..clear()
       ..addAll(
         (json['items'] as List<dynamic>? ?? []).map(
-          (value) => MediaItem.fromJson(value as Map<String, dynamic>),
+          (value) => MediaItem.fromJson(value as Map<String, dynamic>)
+              .withFreshIdentity(),
         ),
       );
     progress
@@ -90,9 +100,25 @@ class AppStore extends ChangeNotifier {
       ..clear()
       ..addAll((json['folderOrientations'] as Map<String, dynamic>? ?? {})
           .map((key, value) => MapEntry(key, value as String)));
+    metadata
+      ..clear()
+      ..addAll((json['metadata'] as Map<String, dynamic>? ?? {}).map(
+        (key, value) => MapEntry(
+          key,
+          MediaMetadata.fromJson(value as Map<String, dynamic>),
+        ),
+      ));
+    final tmdb = json['tmdbConfig'];
+    tmdbConfig = tmdb == null
+        ? const TmdbConfig()
+        : TmdbConfig.fromJson(tmdb as Map<String, dynamic>);
     final sync = json['syncConfig'];
     syncConfig =
         sync == null ? null : SyncConfig.fromJson(sync as Map<String, dynamic>);
+    diagnosticLogs
+      ..clear()
+      ..addAll((json['diagnosticLogs'] as List<dynamic>? ?? const [])
+          .whereType<String>());
     if (persist) await save();
     notifyListeners();
   }
@@ -127,6 +153,7 @@ class AppStore extends ChangeNotifier {
   Future<void> removeSource(MediaSourceConfig source) async {
     sources.removeWhere((value) => value.id == source.id);
     items.removeWhere((item) => item.sourceId == source.id);
+    metadata.removeWhere((itemId, _) => itemId.startsWith('${source.id}:'));
     await save();
     notifyListeners();
   }
@@ -137,15 +164,21 @@ class AppStore extends ChangeNotifier {
     for (final source in existing) {
       await scanSourceIntoItems(source);
     }
+    metadata
+        .removeWhere((itemId, _) => !items.any((item) => item.id == itemId));
     await save();
     notifyListeners();
+    unawaited(refreshMissingMetadata());
   }
 
   Future<void> rescanSource(MediaSourceConfig source) async {
     items.removeWhere((item) => item.sourceId == source.id);
     await scanSourceIntoItems(source);
+    metadata
+        .removeWhere((itemId, _) => !items.any((item) => item.id == itemId));
     await save();
     notifyListeners();
+    unawaited(refreshMissingMetadata());
   }
 
   Future<void> scanSourceIntoItems(MediaSourceConfig source) async {
@@ -178,6 +211,7 @@ class AppStore extends ChangeNotifier {
         .sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
     await save();
     notifyListeners();
+    unawaited(refreshMissingMetadata());
   }
 
   Future<void> addLocalSelection(
@@ -200,6 +234,7 @@ class AppStore extends ChangeNotifier {
         .sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
     await save();
     notifyListeners();
+    unawaited(refreshMissingMetadata());
   }
 
   Future<void> removeLocalSelection(
@@ -211,8 +246,11 @@ class AppStore extends ChangeNotifier {
     replaceSource(updated);
     items.removeWhere((item) => item.sourceId == source.id);
     await scanSourceIntoItems(updated);
+    metadata
+        .removeWhere((itemId, _) => !items.any((item) => item.id == itemId));
     await save();
     notifyListeners();
+    unawaited(refreshMissingMetadata());
   }
 
   Future<void> removeWebdavSelection(
@@ -226,8 +264,11 @@ class AppStore extends ChangeNotifier {
     replaceSource(updated);
     items.removeWhere((item) => item.sourceId == source.id);
     await scanSourceIntoItems(updated);
+    metadata
+        .removeWhere((itemId, _) => !items.any((item) => item.id == itemId));
     await save();
     notifyListeners();
+    unawaited(refreshMissingMetadata());
   }
 
   void addOrReplaceItem(MediaItem item) {
@@ -242,6 +283,85 @@ class AppStore extends ChangeNotifier {
 
   Future<void> setSyncConfig(SyncConfig config) async {
     syncConfig = config;
+    await save();
+    notifyListeners();
+  }
+
+  Future<void> setTmdbConfig(TmdbConfig config) async {
+    tmdbConfig = config;
+    await save();
+    notifyListeners();
+    unawaited(refreshMissingMetadata(force: true));
+  }
+
+  Future<void> refreshMissingMetadata({bool force = false}) async {
+    if (!tmdbConfig.enabled || metadataRefreshing) return;
+    metadataRefreshing = true;
+    tmdbLastStatus = 'TMDB refresh started';
+    addDiagnosticLog(
+        'TMDB refresh started, force=$force, items=${items.length}');
+    notifyListeners();
+    try {
+      final service = TmdbMetadataService(tmdbConfig, log: addDiagnosticLog);
+      var matched = 0;
+      var failed = 0;
+      var skipped = 0;
+      for (final item in List<MediaItem>.from(items)) {
+        addDiagnosticLog('TMDB item: ${describeMediaItem(item)}');
+        final cached = metadata[item.id];
+        if (!force &&
+            cached != null &&
+            cached.schemaVersion >= currentMetadataSchemaVersion) {
+          skipped++;
+          addDiagnosticLog('TMDB skip cached: ${describeMediaItem(item)}');
+          continue;
+        }
+        MediaMetadata? value;
+        try {
+          value = await service.lookup(item);
+        } catch (error) {
+          failed++;
+          tmdbLastStatus = 'TMDB error: ${describeMediaItem(item)} - $error';
+          addDiagnosticLog(tmdbLastStatus);
+          notifyListeners();
+          continue;
+        }
+        if (value != null) {
+          metadata[item.id] = value;
+          matched++;
+          addDiagnosticLog(
+              'TMDB matched item=${describeMediaItem(item)} tmdb=${value.tmdbId} type=${value.mediaType} poster=${value.posterPath} still=${value.stillPath}');
+          await save();
+          notifyListeners();
+        } else {
+          failed++;
+          tmdbLastStatus = 'TMDB no match: ${describeMediaItem(item)}';
+          addDiagnosticLog(tmdbLastStatus);
+          notifyListeners();
+        }
+      }
+      tmdbLastStatus =
+          'TMDB refresh done: $matched matched, $failed failed, $skipped skipped';
+      addDiagnosticLog(tmdbLastStatus);
+    } finally {
+      metadataRefreshing = false;
+      notifyListeners();
+    }
+  }
+
+  void addDiagnosticLog(String message) {
+    final time = DateTime.now().toIso8601String();
+    diagnosticLogs.add('$time $message');
+    if (diagnosticLogs.length > 1000) {
+      diagnosticLogs.removeRange(0, diagnosticLogs.length - 1000);
+    }
+  }
+
+  String exportDiagnosticLogs() => diagnosticLogs.join('\n');
+
+  Future<void> clearDiagnosticLogs() async {
+    diagnosticLogs.clear();
+    tmdbLastStatus = '';
     await save();
     notifyListeners();
   }
