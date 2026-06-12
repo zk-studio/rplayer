@@ -415,6 +415,11 @@ class MediaMetadata {
     this.episodeName,
     this.updatedAt,
     this.schemaVersion = 0,
+    this.seasonName,
+    this.seasonOverview,
+    this.seasonAirDate,
+    this.seasonEpisodeCount,
+    this.seasonPosterPath,
   });
 
   final String itemId;
@@ -437,6 +442,11 @@ class MediaMetadata {
   final String? episodeName;
   final int? updatedAt;
   final int schemaVersion;
+  final String? seasonName;
+  final String? seasonOverview;
+  final String? seasonAirDate;
+  final int? seasonEpisodeCount;
+  final String? seasonPosterPath;
 
   String? get posterUrl => tmdbImageUrl(posterPath, 'w500');
   String? get backdropUrl => tmdbImageUrl(backdropPath, 'w780');
@@ -472,6 +482,11 @@ class MediaMetadata {
         episodeName: json['episodeName'] as String?,
         updatedAt: (json['updatedAt'] as num?)?.toInt(),
         schemaVersion: (json['schemaVersion'] as num?)?.toInt() ?? 0,
+        seasonName: json['seasonName'] as String?,
+        seasonOverview: json['seasonOverview'] as String?,
+        seasonAirDate: json['seasonAirDate'] as String?,
+        seasonEpisodeCount: (json['seasonEpisodeCount'] as num?)?.toInt(),
+        seasonPosterPath: json['seasonPosterPath'] as String?,
       );
 
   Map<String, dynamic> toJson() => {
@@ -495,6 +510,11 @@ class MediaMetadata {
         'episodeName': episodeName,
         'updatedAt': updatedAt,
         'schemaVersion': schemaVersion,
+        'seasonName': seasonName,
+        'seasonOverview': seasonOverview,
+        'seasonAirDate': seasonAirDate,
+        'seasonEpisodeCount': seasonEpisodeCount,
+        'seasonPosterPath': seasonPosterPath,
       };
 }
 

@@ -480,6 +480,11 @@ class TmdbMetadataService {
       episodeName: episode?['name'] as String?,
       updatedAt: DateTime.now().millisecondsSinceEpoch,
       schemaVersion: currentMetadataSchemaVersion,
+      seasonName: seasonJson?['name'] as String?,
+      seasonOverview: seasonJson?['overview'] as String?,
+      seasonAirDate: seasonJson?['air_date'] as String?,
+      seasonEpisodeCount: (seasonJson?['episodes'] as List<dynamic>?)?.length,
+      seasonPosterPath: seasonJson?['poster_path'] as String?,
     );
   }
 

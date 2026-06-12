@@ -621,6 +621,88 @@ pub async fn cache_images_json(db_path: &str, metadata_json: &str, proxy_url: &s
     Ok(())
 }
 
+fn merge_duplicate_folders(conn: &Connection) -> Result<()> {
+    let mut stmt = conn.prepare("select id, source_id, path from source_folders")?;
+    let folders: Vec<(i64, String, String)> = stmt.query_map([], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+    })?.collect::<Result<_, _>>()?;
+    drop(stmt);
+
+    for (id, source_id, path) in folders {
+        let normalized = normalize_folder_path(&path);
+        if path == normalized {
+            continue;
+        }
+
+        let target_id_res: Result<i64, rusqlite::Error> = conn.query_row(
+            "select id from source_folders where source_id = ?1 and path = ?2",
+            params![source_id, normalized],
+            |row| row.get(0),
+        );
+
+        match target_id_res {
+            Ok(target_id) => {
+                conn.execute(
+                    "update media_files set folder_id = ?1 where folder_id = ?2",
+                    params![target_id, id],
+                )?;
+
+                let has_pref: bool = conn.query_row(
+                    "select exists(select 1 from folder_preferences where folder_id = ?1)",
+                    params![target_id],
+                    |row| row.get(0),
+                )?;
+                if has_pref {
+                    conn.execute(
+                        "delete from folder_preferences where folder_id = ?1",
+                        params![id],
+                    )?;
+                } else {
+                    conn.execute(
+                        "update folder_preferences set folder_id = ?1 where folder_id = ?2",
+                        params![target_id, id],
+                    )?;
+                }
+
+                conn.execute(
+                    "update match_tasks set folder_id = ?1 where folder_id = ?2",
+                    params![target_id, id],
+                )?;
+
+                let has_match: bool = conn.query_row(
+                    "select exists(select 1 from source_folder_matches where folder_id = ?1)",
+                    params![target_id],
+                    |row| row.get(0),
+                )?;
+                if has_match {
+                    conn.execute(
+                        "delete from source_folder_matches where folder_id = ?1",
+                        params![id],
+                    )?;
+                } else {
+                    conn.execute(
+                        "update source_folder_matches set folder_id = ?1 where folder_id = ?2",
+                        params![target_id, id],
+                    )?;
+                }
+
+                conn.execute(
+                    "delete from source_folders where id = ?1",
+                    params![id],
+                )?;
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                conn.execute(
+                    "update source_folders set path = ?1, updated_at = ?2 where id = ?3",
+                    params![normalized, now_ms(), id],
+                )?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
 fn open(db_path: &str) -> Result<Connection> {
     let conn = Connection::open(db_path)?;
     conn.execute_batch(
@@ -947,6 +1029,7 @@ fn open(db_path: &str) -> Result<Connection> {
     add_column_if_missing(&conn, "sources", "username", "text")?;
     add_column_if_missing(&conn, "sources", "password", "text")?;
     conn.execute_batch("pragma foreign_keys = on;")?;
+    merge_duplicate_folders(&conn)?;
     Ok(conn)
 }
 
@@ -1523,13 +1606,28 @@ fn upsert_tmdb_metadata(
     let season_number = season.unwrap_or(1);
     conn.execute(
         "insert into tmdb_tv_seasons(
-           show_id, season_number, fetched_language, last_synced_at, created_at, updated_at
+           show_id, season_number, name, overview, air_date, episode_count, poster_path,
+           fetched_language, last_synced_at, created_at, updated_at
          )
-         values (?1, ?2, 'unknown', ?3, ?3, ?3)
+         values (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'unknown', ?8, ?8, ?8)
          on conflict(show_id, season_number) do update set
+           name=coalesce(excluded.name, tmdb_tv_seasons.name),
+           overview=coalesce(excluded.overview, tmdb_tv_seasons.overview),
+           air_date=coalesce(excluded.air_date, tmdb_tv_seasons.air_date),
+           episode_count=coalesce(excluded.episode_count, tmdb_tv_seasons.episode_count),
+           poster_path=coalesce(excluded.poster_path, tmdb_tv_seasons.poster_path),
            last_synced_at=excluded.last_synced_at,
            updated_at=excluded.updated_at",
-        params![show_id, season_number, now],
+        params![
+            show_id,
+            season_number,
+            value.get("seasonName").and_then(Value::as_str),
+            value.get("seasonOverview").and_then(Value::as_str),
+            value.get("seasonAirDate").and_then(Value::as_str),
+            value.get("seasonEpisodeCount").and_then(Value::as_i64),
+            value.get("seasonPosterPath").and_then(Value::as_str),
+            now
+        ],
     )?;
     let season_id: i64 = conn.query_row(
         "select id from tmdb_tv_seasons where show_id=?1 and season_number=?2",
@@ -2055,11 +2153,19 @@ fn normalize_resource_path(path: &str) -> String {
     while value.contains("//") {
         value = value.replace("//", "/");
     }
-    if value == "/dav" {
+    if value == "/dav" || value == "dav" || value == "/dav/" || value == "dav/" {
         return "/".to_string();
     }
     if let Some(rest) = value.strip_prefix("/dav/") {
         value = format!("/{rest}");
+    } else if let Some(rest) = value.strip_prefix("dav/") {
+        value = format!("/{rest}");
+    }
+    let is_windows_drive = value.len() >= 3
+        && value.chars().next().unwrap().is_ascii_alphabetic()
+        && &value[1..3] == ":/";
+    if !is_windows_drive && !value.starts_with('/') {
+        value.insert(0, '/');
     }
     value
 }
@@ -2184,6 +2290,87 @@ fn query_profile_paths(conn: &Connection, show_id: i64) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_normalize_resource_path_logic() {
+        assert_eq!(normalize_resource_path("dav/夸克/来自：分享/家业"), "/夸克/来自：分享/家业");
+        assert_eq!(normalize_resource_path("/dav/夸克/来自：分享/家业/"), "/夸克/来自：分享/家业/");
+        assert_eq!(normalize_resource_path("D:\\Movies\\Inception.mkv"), "D:/Movies/Inception.mkv");
+        assert_eq!(normalize_resource_path("Movies/Inception.mkv"), "/Movies/Inception.mkv");
+        assert_eq!(normalize_folder_path("dav/夸克/来自：分享/家业"), "/夸克/来自：分享/家业/");
+    }
+
+    #[test]
+    fn test_merge_duplicate_folders_logic() {
+        let db_path =
+            std::env::temp_dir().join(format!("player_core_merge_test_{}.sqlite", now_ms()));
+        let db_str = db_path.to_str().unwrap();
+
+        let conn = open(db_str).unwrap();
+
+        conn.execute(
+            "insert into sources(id, name, type, created_at, updated_at) values ('src-1', 'Test Source', 'webdav', 1, 1)",
+            [],
+        ).unwrap();
+
+        conn.execute(
+            "insert into source_folders(source_id, path, created_at, updated_at) values ('src-1', '/夸克/来自：分享/家业/', 1, 1)",
+            [],
+        ).unwrap();
+        let normalized_folder_id: i64 = conn.query_row(
+            "select id from source_folders where path = '/夸克/来自：分享/家业/'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+
+        conn.execute(
+            "insert into source_folders(source_id, path, created_at, updated_at) values ('src-1', '/dav/夸克/来自：分享/家业', 1, 1)",
+            [],
+        ).unwrap();
+        let unnormalized_folder_id1: i64 = conn.query_row(
+            "select id from source_folders where path = '/dav/夸克/来自：分享/家业'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+
+        conn.execute(
+            "insert into source_folders(source_id, path, created_at, updated_at) values ('src-1', '/dav/夸克/来自：分享/家业/', 1, 1)",
+            [],
+        ).unwrap();
+        let unnormalized_folder_id2: i64 = conn.query_row(
+            "select id from source_folders where path = '/dav/夸克/来自：分享/家业/'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+
+        conn.execute(
+            "insert into media_files(legacy_item_id, source_id, folder_id, relative_path, filename, created_at, updated_at)
+             values ('item-1', 'src-1', ?1, '/夸克/来自：分享/家业/01.mp4', '01.mp4', 1, 1)",
+            params![unnormalized_folder_id1],
+        ).unwrap();
+        let file_id: i64 = conn.query_row("select id from media_files where legacy_item_id='item-1'", [], |row| row.get(0)).unwrap();
+
+        conn.execute(
+            "insert into folder_preferences(folder_id, preferred_orientation, updated_at) values (?1, 'landscape', 1)",
+            params![unnormalized_folder_id2],
+        ).unwrap();
+
+        merge_duplicate_folders(&conn).unwrap();
+
+        let remaining_folders_count: i64 = conn.query_row("select count(*) from source_folders", [], |row| row.get(0)).unwrap();
+        assert_eq!(remaining_folders_count, 1);
+
+        let final_folder_path: String = conn.query_row("select path from source_folders", [], |row| row.get(0)).unwrap();
+        assert_eq!(final_folder_path, "/夸克/来自：分享/家业/");
+
+        let final_file_folder_id: i64 = conn.query_row("select folder_id from media_files where id=?1", params![file_id], |row| row.get(0)).unwrap();
+        assert_eq!(final_file_folder_id, normalized_folder_id);
+
+        let final_pref_orientation: String = conn.query_row("select preferred_orientation from folder_preferences where folder_id=?1", params![normalized_folder_id], |row| row.get(0)).unwrap();
+        assert_eq!(final_pref_orientation, "landscape");
+
+        let _ = std::fs::remove_file(db_path);
+    }
 
     #[test]
     fn app_state_round_trips_through_normalized_tables() {
