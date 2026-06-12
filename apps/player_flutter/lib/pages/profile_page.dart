@@ -90,62 +90,76 @@ class TmdbSettingsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final tmdb = store.tmdbConfig;
-    final tmdbStatus = store.metadataRefreshing
-        ? '正在匹配 TMDB 信息...'
-        : store.tmdbLastStatus.isNotEmpty
-            ? store.tmdbLastStatus
-            : '刷新海报、背景图、剧集封面和演员信息';
     return Scaffold(
       appBar: AppBar(title: const Text('TMDB 与媒体信息')),
-      body: ListView(
-        padding: const EdgeInsets.all(22),
-        children: [
-          ProfileActionCard(
-            icon: Icons.image_search_outlined,
-            title: 'TMDB API',
-            subtitle: tmdb.enabled
-                ? '${tmdb.language} / ${tmdb.region} / ${Uri.parse(tmdb.apiBaseUrl).host}'
-                : '获取影片信息、竖版海报和剧集封面',
-            actionText: tmdb.enabled ? '编辑' : '设置',
-            onTap: () => showTmdbConfigDialog(context, store),
-          ),
-          ProfileActionCard(
-            icon: Icons.auto_awesome_motion_outlined,
-            title: '刷新影片信息',
-            subtitle: tmdbStatus,
-            actionText: store.metadataRefreshing ? '进行中' : '刷新',
-            onTap: () {
-              if (!store.tmdbConfig.enabled) {
-                showSnack(context, '请先设置 TMDB API Token');
-                return;
-              }
-              unawaited(store.refreshMissingMetadata(force: true));
-            },
-          ),
-          ProfileActionCard(
-            icon: Icons.content_copy_outlined,
-            title: '复制诊断日志',
-            subtitle: '复制最近 ${store.diagnosticLogs.length} 条 TMDB 和扫描日志',
-            actionText: '复制',
-            onTap: () async {
-              await Clipboard.setData(
-                ClipboardData(text: store.exportDiagnosticLogs()),
-              );
-              if (context.mounted) showSnack(context, '诊断日志已复制');
-            },
-          ),
-          ProfileActionCard(
-            icon: Icons.delete_sweep_outlined,
-            title: '清空诊断日志',
-            subtitle: '清空本机保存的调试日志',
-            actionText: '清空',
-            onTap: () async {
-              await store.clearDiagnosticLogs();
-              if (context.mounted) showSnack(context, '诊断日志已清空');
-            },
-          ),
-        ],
+      body: AnimatedBuilder(
+        animation: store,
+        builder: (context, _) {
+          final tmdb = store.tmdbConfig;
+          final tmdbStatus = store.metadataRefreshing
+              ? '正在匹配 TMDB 信息...'
+              : store.tmdbLastStatus.isNotEmpty
+                  ? store.tmdbLastStatus
+                  : '刷新海报、背景图、剧集封面和演员信息';
+          return ListView(
+            padding: const EdgeInsets.all(22),
+            children: [
+              ProfileActionCard(
+                icon: Icons.image_search_outlined,
+                title: 'TMDB API',
+                subtitle: tmdb.enabled
+                    ? '${tmdb.language} / ${tmdb.region} / ${Uri.parse(tmdb.apiBaseUrl).host}'
+                    : '获取影片信息、竖版海报和剧集封面',
+                actionText: tmdb.enabled ? '编辑' : '设置',
+                onTap: () => showTmdbConfigDialog(context, store),
+              ),
+              ProfileActionCard(
+                icon: Icons.auto_awesome_motion_outlined,
+                title: '刷新影片信息',
+                subtitle: tmdbStatus,
+                actionText: store.metadataRefreshing ? '进行中' : '刷新',
+                onTap: () {
+                  if (!store.tmdbConfig.enabled) {
+                    showSnack(context, '请先设置 TMDB API Token');
+                    return;
+                  }
+                  unawaited(store.refreshMissingMetadata(force: true));
+                },
+              ),
+              SwitchListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                secondary: const Icon(Icons.bug_report_outlined),
+                title: const Text('诊断日志'),
+                subtitle: Text(store.diagnosticLoggingEnabled
+                    ? '已开启，记录扫描、同步、TMDB、缓存和数据库事件'
+                    : '已关闭，不记录新的诊断日志'),
+                value: store.diagnosticLoggingEnabled,
+                onChanged: (value) =>
+                    unawaited(store.setDiagnosticLoggingEnabled(value)),
+              ),
+              ProfileActionCard(
+                icon: Icons.file_download_outlined,
+                title: '导出诊断日志',
+                subtitle: '导出最近 ${store.diagnosticLogs.length} 条诊断日志为 txt 文件',
+                actionText: '导出',
+                onTap: () async {
+                  final path = await store.exportDiagnosticLogFile();
+                  if (context.mounted) showSnack(context, '诊断日志已导出：$path');
+                },
+              ),
+              ProfileActionCard(
+                icon: Icons.delete_sweep_outlined,
+                title: '清空诊断日志',
+                subtitle: '清空当前内存中的调试日志',
+                actionText: '清空',
+                onTap: () async {
+                  await store.clearDiagnosticLogs();
+                  if (context.mounted) showSnack(context, '诊断日志已清空');
+                },
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -169,7 +183,7 @@ class SyncSettingsPage extends StatelessWidget {
             title: '同步 WebDAV',
             subtitle: sync == null
                 ? '单独配置备份位置'
-                : '${sync.configPath} / ${sync.databasePath}',
+                : '${sync.configPath}\n${sync.databasePath}',
             actionText: sync == null ? '设置' : '编辑',
             onTap: () => showSyncConfigDialog(context, store),
           ),
@@ -186,6 +200,27 @@ class SyncSettingsPage extends StatelessWidget {
             subtitle: '按开关从 WebDAV 恢复配置和数据库',
             actionText: '下载',
             onTap: () => downloadState(context, store),
+          ),
+          ProfileActionCard(
+            icon: Icons.file_download_outlined,
+            title: '导出配置文件',
+            subtitle: '只导出软件设置，不包含视频、播放进度和 TMDB 元数据',
+            actionText: '导出',
+            onTap: () async {
+              final path = await store.exportConfigFile();
+              if (context.mounted) showSnack(context, '配置文件已导出：$path');
+            },
+          ),
+          ProfileActionCard(
+            icon: Icons.sd_storage_outlined,
+            title: '导出数据库文件',
+            subtitle: '导出媒体库、播放进度、TMDB 元数据和图片缓存数据库',
+            actionText: '导出',
+            onTap: () async {
+              showSnack(context, '正在准备数据库导出...');
+              final path = await store.exportDatabaseFile();
+              if (context.mounted) showSnack(context, '数据库已导出：$path');
+            },
           ),
         ],
       ),

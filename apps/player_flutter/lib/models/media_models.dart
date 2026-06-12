@@ -133,10 +133,11 @@ class MediaItem {
     this.season,
     this.episode,
     this.mediaKind = 'Unknown',
+    this.size,
   });
 
   factory MediaItem.local(
-      {required MediaSourceConfig source, required String path}) {
+      {required MediaSourceConfig source, required String path, int? size}) {
     final title = p.basenameWithoutExtension(path);
     final folderTitle = mediaSeriesTitleFromLocalPath(path);
     final identity = RustCoreService.instance.tryParseMediaIdentity(
@@ -156,6 +157,7 @@ class MediaItem {
       season: identity?.season,
       episode: identity?.episode,
       mediaKind: identity?.kind ?? 'Unknown',
+      size: size,
     );
   }
 
@@ -180,6 +182,7 @@ class MediaItem {
       season: identity?.season,
       episode: identity?.episode,
       mediaKind: identity?.kind ?? 'Unknown',
+      size: entry.size,
     );
   }
 
@@ -195,6 +198,7 @@ class MediaItem {
   final int? season;
   final int? episode;
   final String mediaKind;
+  final int? size;
 
   MediaItem copyWith({
     String? id,
@@ -209,6 +213,7 @@ class MediaItem {
     int? season,
     int? episode,
     String? mediaKind,
+    int? size,
   }) {
     return MediaItem(
       id: id ?? this.id,
@@ -223,6 +228,7 @@ class MediaItem {
       season: season ?? this.season,
       episode: episode ?? this.episode,
       mediaKind: mediaKind ?? this.mediaKind,
+      size: size ?? this.size,
     );
   }
 
@@ -249,6 +255,7 @@ class MediaItem {
       season: identity.season,
       episode: identity.episode,
       mediaKind: identity.kind,
+      size: size,
     );
   }
 
@@ -267,6 +274,7 @@ class MediaItem {
         season: (json['season'] as num?)?.toInt(),
         episode: (json['episode'] as num?)?.toInt(),
         mediaKind: json['mediaKind'] as String? ?? 'Unknown',
+        size: (json['size'] as num?)?.toInt(),
       );
 
   Map<String, dynamic> toJson() => {
@@ -282,6 +290,7 @@ class MediaItem {
         'season': season,
         'episode': episode,
         'mediaKind': mediaKind,
+        'size': size,
       };
 }
 
@@ -487,6 +496,283 @@ class MediaMetadata {
         'updatedAt': updatedAt,
         'schemaVersion': schemaVersion,
       };
+}
+
+class LibraryHomeEntry {
+  const LibraryHomeEntry({
+    required this.folderId,
+    required this.sourceId,
+    required this.folderPath,
+    required this.showId,
+    required this.tmdbId,
+    required this.title,
+    this.overview,
+    this.posterPath,
+    this.backdropPath,
+    this.voteAverage,
+    this.releaseDate,
+    this.totalEpisodes,
+    required this.localFileCount,
+    this.latestPlayedAt,
+    this.matched = false,
+  });
+
+  final int folderId;
+  final String sourceId;
+  final String folderPath;
+  final int showId;
+  final int tmdbId;
+  final String title;
+  final String? overview;
+  final String? posterPath;
+  final String? backdropPath;
+  final double? voteAverage;
+  final String? releaseDate;
+  final int? totalEpisodes;
+  final int localFileCount;
+  final int? latestPlayedAt;
+  final bool matched;
+
+  factory LibraryHomeEntry.fromJson(Map<String, dynamic> json) {
+    return LibraryHomeEntry(
+      folderId: (json['folderId'] as num?)?.toInt() ?? 0,
+      sourceId: json['sourceId'] as String? ?? '',
+      folderPath: json['folderPath'] as String? ?? '',
+      showId: (json['showId'] as num?)?.toInt() ?? 0,
+      tmdbId: (json['tmdbId'] as num?)?.toInt() ?? 0,
+      title: json['title'] as String? ?? '',
+      overview: json['overview'] as String?,
+      posterPath: json['posterPath'] as String?,
+      backdropPath: json['backdropPath'] as String?,
+      voteAverage: (json['voteAverage'] as num?)?.toDouble(),
+      releaseDate: json['releaseDate'] as String?,
+      totalEpisodes: (json['totalEpisodes'] as num?)?.toInt(),
+      localFileCount: (json['localFileCount'] as num?)?.toInt() ?? 0,
+      latestPlayedAt: (json['latestPlayedAt'] as num?)?.toInt(),
+      matched: json['matched'] == true,
+    );
+  }
+
+  String get folderKey => '$sourceId:db:$folderPath';
+}
+
+class LibraryShowDetail {
+  const LibraryShowDetail({
+    required this.folderKey,
+    this.genres = const [],
+    this.castNames = const [],
+    this.profilePaths = const [],
+    required this.files,
+  });
+
+  final String folderKey;
+  final List<String> genres;
+  final List<String> castNames;
+  final List<String?> profilePaths;
+  final List<LibraryFileEntry> files;
+
+  LibraryFileEntry? get currentFile {
+    final played = files.where((file) => (file.lastPlayedAt ?? 0) > 0).toList()
+      ..sort((a, b) => (b.lastPlayedAt ?? 0).compareTo(a.lastPlayedAt ?? 0));
+    if (played.isNotEmpty) return played.first;
+    final progress = files.where((file) => (file.positionMs ?? 0) > 0).toList()
+      ..sort((a, b) => (b.positionMs ?? 0).compareTo(a.positionMs ?? 0));
+    if (progress.isNotEmpty) return progress.first;
+    return files.firstOrNull;
+  }
+
+  LibraryFileEntry? get representative => currentFile ?? files.firstOrNull;
+
+  factory LibraryShowDetail.fromJson(Map<String, dynamic> json) {
+    return LibraryShowDetail(
+      folderKey: json['folderKey'] as String? ?? '',
+      genres: (json['genres'] as List<dynamic>? ?? const [])
+          .whereType<String>()
+          .toList(),
+      castNames: (json['castNames'] as List<dynamic>? ?? const [])
+          .whereType<String>()
+          .toList(),
+      profilePaths: (json['profilePaths'] as List<dynamic>? ?? const [])
+          .map((value) => value is String ? value : null)
+          .toList(),
+      files: (json['files'] as List<dynamic>? ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(LibraryFileEntry.fromJson)
+          .toList(),
+    );
+  }
+}
+
+class LibraryFileEntry {
+  const LibraryFileEntry({
+    required this.fileId,
+    required this.legacyItemId,
+    required this.relativePath,
+    required this.filename,
+    this.size,
+    this.guessSeason,
+    this.guessEpisode,
+    this.positionMs,
+    this.durationMs,
+    this.lastPlayedAt,
+    this.showId,
+    this.tmdbId,
+    this.showTitle,
+    this.originalTitle,
+    this.showOverview,
+    this.posterPath,
+    this.backdropPath,
+    this.logoPath,
+    this.voteAverage,
+    this.releaseDate,
+    this.totalSeasons,
+    this.totalEpisodes,
+    this.episodeId,
+    this.seasonNumber,
+    this.episodeNumber,
+    this.episodeName,
+    this.episodeOverview,
+    this.episodeAirDate,
+    this.runtime,
+    this.stillPath,
+  });
+
+  final int fileId;
+  final String legacyItemId;
+  final String relativePath;
+  final String filename;
+  final int? size;
+  final int? guessSeason;
+  final int? guessEpisode;
+  final int? positionMs;
+  final int? durationMs;
+  final int? lastPlayedAt;
+  final int? showId;
+  final int? tmdbId;
+  final String? showTitle;
+  final String? originalTitle;
+  final String? showOverview;
+  final String? posterPath;
+  final String? backdropPath;
+  final String? logoPath;
+  final double? voteAverage;
+  final String? releaseDate;
+  final int? totalSeasons;
+  final int? totalEpisodes;
+  final int? episodeId;
+  final int? seasonNumber;
+  final int? episodeNumber;
+  final String? episodeName;
+  final String? episodeOverview;
+  final String? episodeAirDate;
+  final int? runtime;
+  final String? stillPath;
+
+  factory LibraryFileEntry.fromJson(Map<String, dynamic> json) {
+    return LibraryFileEntry(
+      fileId: (json['fileId'] as num?)?.toInt() ?? 0,
+      legacyItemId: json['legacyItemId'] as String? ?? '',
+      relativePath: json['relativePath'] as String? ?? '',
+      filename: json['filename'] as String? ?? '',
+      size: (json['size'] as num?)?.toInt(),
+      guessSeason: (json['guessSeason'] as num?)?.toInt(),
+      guessEpisode: (json['guessEpisode'] as num?)?.toInt(),
+      positionMs: (json['positionMs'] as num?)?.toInt(),
+      durationMs: (json['durationMs'] as num?)?.toInt(),
+      lastPlayedAt: (json['lastPlayedAt'] as num?)?.toInt(),
+      showId: (json['showId'] as num?)?.toInt(),
+      tmdbId: (json['tmdbId'] as num?)?.toInt(),
+      showTitle: json['showTitle'] as String?,
+      originalTitle: json['originalTitle'] as String?,
+      showOverview: json['showOverview'] as String?,
+      posterPath: json['posterPath'] as String?,
+      backdropPath: json['backdropPath'] as String?,
+      logoPath: json['logoPath'] as String?,
+      voteAverage: (json['voteAverage'] as num?)?.toDouble(),
+      releaseDate: json['releaseDate'] as String?,
+      totalSeasons: (json['totalSeasons'] as num?)?.toInt(),
+      totalEpisodes: (json['totalEpisodes'] as num?)?.toInt(),
+      episodeId: (json['episodeId'] as num?)?.toInt(),
+      seasonNumber: (json['seasonNumber'] as num?)?.toInt(),
+      episodeNumber: (json['episodeNumber'] as num?)?.toInt(),
+      episodeName: json['episodeName'] as String?,
+      episodeOverview: json['episodeOverview'] as String?,
+      episodeAirDate: json['episodeAirDate'] as String?,
+      runtime: (json['runtime'] as num?)?.toInt(),
+      stillPath: json['stillPath'] as String?,
+    );
+  }
+
+  String get displayTitle {
+    if (episodeName?.isNotEmpty == true) return episodeName!;
+    return filename.isEmpty ? relativePath : filename;
+  }
+
+  int? get displayEpisode => episodeNumber ?? guessEpisode;
+  int? get displaySeason => seasonNumber ?? guessSeason;
+}
+
+class LibraryRecentEntry {
+  const LibraryRecentEntry({
+    required this.fileId,
+    required this.legacyItemId,
+    required this.relativePath,
+    required this.filename,
+    this.size,
+    required this.positionMs,
+    this.durationMs,
+    this.lastPlayedAt,
+    this.showTitle,
+    this.posterPath,
+    this.backdropPath,
+    this.seasonNumber,
+    this.episodeNumber,
+    this.episodeName,
+    this.stillPath,
+  });
+
+  final int fileId;
+  final String legacyItemId;
+  final String relativePath;
+  final String filename;
+  final int? size;
+  final int positionMs;
+  final int? durationMs;
+  final int? lastPlayedAt;
+  final String? showTitle;
+  final String? posterPath;
+  final String? backdropPath;
+  final int? seasonNumber;
+  final int? episodeNumber;
+  final String? episodeName;
+  final String? stillPath;
+
+  factory LibraryRecentEntry.fromJson(Map<String, dynamic> json) {
+    return LibraryRecentEntry(
+      fileId: (json['fileId'] as num?)?.toInt() ?? 0,
+      legacyItemId: json['legacyItemId'] as String? ?? '',
+      relativePath: json['relativePath'] as String? ?? '',
+      filename: json['filename'] as String? ?? '',
+      size: (json['size'] as num?)?.toInt(),
+      positionMs: (json['positionMs'] as num?)?.toInt() ?? 0,
+      durationMs: (json['durationMs'] as num?)?.toInt(),
+      lastPlayedAt: (json['lastPlayedAt'] as num?)?.toInt(),
+      showTitle: json['showTitle'] as String?,
+      posterPath: json['posterPath'] as String?,
+      backdropPath: json['backdropPath'] as String?,
+      seasonNumber: (json['seasonNumber'] as num?)?.toInt(),
+      episodeNumber: (json['episodeNumber'] as num?)?.toInt(),
+      episodeName: json['episodeName'] as String?,
+      stillPath: json['stillPath'] as String?,
+    );
+  }
+
+  String get displayTitle {
+    final prefix = showTitle?.isNotEmpty == true ? showTitle! : filename;
+    if (episodeNumber == null) return prefix;
+    final name = episodeName?.isNotEmpty == true ? ' $episodeName' : '';
+    return '$prefix 第 $episodeNumber 集$name';
+  }
 }
 
 class WebdavSourceDraft {

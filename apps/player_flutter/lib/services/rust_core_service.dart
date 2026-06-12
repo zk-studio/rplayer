@@ -27,9 +27,18 @@ class RustCoreService {
   _RustStringDart? _listLocalDirectoryJson;
   _RustTwoStringDart? _parseMediaIdentityJson;
   _RustThreeStringDart? _tmdbGetJson;
-  _RustThreeStringDart? _metadataPutJson;
+  _RustFourStringDart? _metadataPutJson;
+  _RustThreeStringDart? _metadataCacheImagesJson;
   _RustStringDart? _metadataGetAllJson;
   _RustTwoStringDart? _metadataReplaceAllJson;
+  _RustThreeStringDart? _metadataPruneJson;
+  _RustStringDart? _appStateGetJson;
+  _RustTwoStringDart? _appStatePutJson;
+  _RustThreeStringDart? _metadataCachedImageJson;
+  _RustTwoStringDart? _metadataPutCachedImageJson;
+  _RustStringDart? _libraryHomeJson;
+  _RustTwoStringDart? _libraryShowDetailJson;
+  _RustStringDart? _libraryRecentJson;
   _RustFourStringDart? _parseWebdavEntriesJson;
   _RustFreeDart? _freeString;
   Object? _loadError;
@@ -42,8 +51,17 @@ class RustCoreService {
       _parseMediaIdentityJson != null &&
       _tmdbGetJson != null &&
       _metadataPutJson != null &&
+      _metadataCacheImagesJson != null &&
       _metadataGetAllJson != null &&
       _metadataReplaceAllJson != null &&
+      _metadataPruneJson != null &&
+      _appStateGetJson != null &&
+      _appStatePutJson != null &&
+      _metadataCachedImageJson != null &&
+      _metadataPutCachedImageJson != null &&
+      _libraryHomeJson != null &&
+      _libraryShowDetailJson != null &&
+      _libraryRecentJson != null &&
       _parseWebdavEntriesJson != null &&
       _freeString != null;
 
@@ -99,15 +117,28 @@ class RustCoreService {
     return Isolate.run(() => _rustTmdbGetJsonWorker(args));
   }
 
-  void metadataPut(String dbPath, String itemId, String metadataJson) {
+  void metadataPut(
+      String dbPath, String titleKey, String itemId, String metadataJson) {
     _ensureAvailable();
-    _callThreeString(_metadataPutJson, dbPath, itemId, metadataJson);
+    _callFourString(_metadataPutJson, dbPath, titleKey, itemId, metadataJson);
   }
 
   Future<void> metadataPutAsync(
-      String dbPath, String itemId, String metadataJson) {
-    final args = [dbPath, itemId, metadataJson];
+      String dbPath, String titleKey, String itemId, String metadataJson) {
+    final args = [dbPath, titleKey, itemId, metadataJson];
     return Isolate.run(() => _rustMetadataPutWorker(args));
+  }
+
+  void metadataCacheImages(
+      String dbPath, String metadataJson, String proxyUrl) {
+    _ensureAvailable();
+    _callThreeString(_metadataCacheImagesJson, dbPath, metadataJson, proxyUrl);
+  }
+
+  Future<void> metadataCacheImagesAsync(
+      String dbPath, String metadataJson, String proxyUrl) {
+    final args = [dbPath, metadataJson, proxyUrl];
+    return Isolate.run(() => _rustMetadataCacheImagesWorker(args));
   }
 
   Map<String, MediaMetadata> metadataGetAll(String dbPath) {
@@ -154,6 +185,132 @@ class RustCoreService {
         )));
     final args = [dbPath, text];
     return Isolate.run(() => _rustMetadataReplaceAllWorker(args));
+  }
+
+  void metadataPrune(
+      String dbPath, List<String> liveItemIds, List<String> liveTitleKeys) {
+    _ensureAvailable();
+    _callThreeString(
+      _metadataPruneJson,
+      dbPath,
+      jsonEncode(liveItemIds),
+      jsonEncode(liveTitleKeys),
+    );
+  }
+
+  Future<void> metadataPruneAsync(
+      String dbPath, List<String> liveItemIds, List<String> liveTitleKeys) {
+    final args = [dbPath, jsonEncode(liveItemIds), jsonEncode(liveTitleKeys)];
+    return Isolate.run(() => _rustMetadataPruneWorker(args));
+  }
+
+  String appStateGet(String dbPath) {
+    _ensureAvailable();
+    return _callString(_appStateGetJson, [dbPath]);
+  }
+
+  Future<String> appStateGetAsync(String dbPath) {
+    final args = [dbPath];
+    return Isolate.run(() => _rustAppStateGetWorker(args));
+  }
+
+  void appStatePut(String dbPath, String stateJson) {
+    _ensureAvailable();
+    _callTwoString(_appStatePutJson, dbPath, stateJson);
+  }
+
+  Future<void> appStatePutAsync(String dbPath, String stateJson) {
+    final args = [dbPath, stateJson];
+    return Isolate.run(() => _rustAppStatePutWorker(args));
+  }
+
+  Uint8List? metadataCachedImage(String dbPath, String imagePath, String size) {
+    _ensureAvailable();
+    final text = _callThreeString(
+      _metadataCachedImageJson,
+      dbPath,
+      imagePath,
+      size,
+    );
+    final value = jsonDecode(text);
+    if (value is! Map<String, dynamic>) return null;
+    final encoded = value['bytesBase64'] as String?;
+    if (encoded == null || encoded.isEmpty) return null;
+    return base64Decode(encoded);
+  }
+
+  Future<Uint8List?> metadataCachedImageAsync(
+      String dbPath, String imagePath, String size) {
+    final args = [dbPath, imagePath, size];
+    return Isolate.run(() => _rustMetadataCachedImageWorker(args));
+  }
+
+  void metadataPutCachedImage(
+    String dbPath,
+    String imagePath,
+    String size,
+    String url,
+    String? contentType,
+    Uint8List bytes,
+  ) {
+    _ensureAvailable();
+    final text = jsonEncode({
+      'path': imagePath,
+      'size': size,
+      'url': url,
+      'contentType': contentType,
+      'bytesBase64': base64Encode(bytes),
+    });
+    _callTwoString(_metadataPutCachedImageJson, dbPath, text);
+  }
+
+  Future<void> metadataPutCachedImageAsync(
+    String dbPath,
+    String imagePath,
+    String size,
+    String url,
+    String? contentType,
+    Uint8List bytes,
+  ) {
+    final args = [
+      dbPath,
+      imagePath,
+      size,
+      url,
+      contentType ?? '',
+      base64Encode(bytes),
+    ];
+    return Isolate.run(() => _rustMetadataPutCachedImageWorker(args));
+  }
+
+  String libraryHomeJson(String dbPath) {
+    _ensureAvailable();
+    return _callString(_libraryHomeJson, [dbPath]);
+  }
+
+  Future<String> libraryHomeJsonAsync(String dbPath) {
+    final args = [dbPath];
+    return Isolate.run(() => _rustLibraryHomeJsonWorker(args));
+  }
+
+  String libraryShowDetailJson(String dbPath, String folderKey) {
+    _ensureAvailable();
+    return _callTwoString(_libraryShowDetailJson, dbPath, folderKey);
+  }
+
+  Future<String> libraryShowDetailJsonAsync(String dbPath, String folderKey) {
+    final args = [dbPath, folderKey];
+    return Isolate.run(() => _rustLibraryShowDetailJsonWorker(args));
+  }
+
+  String libraryRecentJson(String dbPath) {
+    _ensureAvailable();
+    return _callString(_libraryRecentJson, [dbPath]);
+  }
+
+  Future<String> libraryRecentJsonAsync(String dbPath) {
+    final args = [dbPath];
+    return Isolate.run(() => _rustLibraryRecentJsonWorker(args));
   }
 
   List<WebdavEntry> parseWebdavEntries({
@@ -211,14 +368,41 @@ class RustCoreService {
           .lookupFunction<_RustThreeStringFn, _RustThreeStringDart>(
               'player_core_tmdb_get_json');
       _metadataPutJson = _library!
-          .lookupFunction<_RustThreeStringFn, _RustThreeStringDart>(
+          .lookupFunction<_RustFourStringFn, _RustFourStringDart>(
               'player_core_metadata_put_json');
+      _metadataCacheImagesJson = _library!
+          .lookupFunction<_RustThreeStringFn, _RustThreeStringDart>(
+              'player_core_metadata_cache_images_json');
       _metadataGetAllJson = _library!
           .lookupFunction<_RustStringFn, _RustStringDart>(
               'player_core_metadata_get_all_json');
       _metadataReplaceAllJson = _library!
           .lookupFunction<_RustTwoStringFn, _RustTwoStringDart>(
               'player_core_metadata_replace_all_json');
+      _metadataPruneJson = _library!
+          .lookupFunction<_RustThreeStringFn, _RustThreeStringDart>(
+              'player_core_metadata_prune_json');
+      _appStateGetJson = _library!
+          .lookupFunction<_RustStringFn, _RustStringDart>(
+              'player_core_app_state_get_json');
+      _appStatePutJson = _library!
+          .lookupFunction<_RustTwoStringFn, _RustTwoStringDart>(
+              'player_core_app_state_put_json');
+      _metadataCachedImageJson = _library!
+          .lookupFunction<_RustThreeStringFn, _RustThreeStringDart>(
+              'player_core_metadata_cached_image_json');
+      _metadataPutCachedImageJson = _library!
+          .lookupFunction<_RustTwoStringFn, _RustTwoStringDart>(
+              'player_core_metadata_put_cached_image_json');
+      _libraryHomeJson = _library!
+          .lookupFunction<_RustStringFn, _RustStringDart>(
+              'player_core_library_home_json');
+      _libraryShowDetailJson = _library!
+          .lookupFunction<_RustTwoStringFn, _RustTwoStringDart>(
+              'player_core_library_show_detail_json');
+      _libraryRecentJson = _library!
+          .lookupFunction<_RustStringFn, _RustStringDart>(
+              'player_core_library_recent_json');
       _parseWebdavEntriesJson = _library!
           .lookupFunction<_RustFourStringFn, _RustFourStringDart>(
               'player_core_parse_webdav_entries_json');
@@ -341,7 +525,11 @@ String _rustTmdbGetJsonWorker(List<String> args) {
 }
 
 void _rustMetadataPutWorker(List<String> args) {
-  RustCoreService._().metadataPut(args[0], args[1], args[2]);
+  RustCoreService._().metadataPut(args[0], args[1], args[2], args[3]);
+}
+
+void _rustMetadataCacheImagesWorker(List<String> args) {
+  RustCoreService._().metadataCacheImages(args[0], args[1], args[2]);
 }
 
 String _rustMetadataGetAllJsonWorker(List<String> args) {
@@ -359,6 +547,47 @@ void _rustMetadataReplaceAllWorker(List<String> args) {
     ),
   );
   RustCoreService._().metadataReplaceAll(args[0], values);
+}
+
+void _rustMetadataPruneWorker(List<String> args) {
+  final liveItemIds = (jsonDecode(args[1]) as List<dynamic>).cast<String>();
+  final liveTitleKeys = (jsonDecode(args[2]) as List<dynamic>).cast<String>();
+  RustCoreService._().metadataPrune(args[0], liveItemIds, liveTitleKeys);
+}
+
+String _rustAppStateGetWorker(List<String> args) {
+  return RustCoreService._().appStateGet(args[0]);
+}
+
+void _rustAppStatePutWorker(List<String> args) {
+  RustCoreService._().appStatePut(args[0], args[1]);
+}
+
+Uint8List? _rustMetadataCachedImageWorker(List<String> args) {
+  return RustCoreService._().metadataCachedImage(args[0], args[1], args[2]);
+}
+
+void _rustMetadataPutCachedImageWorker(List<String> args) {
+  RustCoreService._().metadataPutCachedImage(
+    args[0],
+    args[1],
+    args[2],
+    args[3],
+    args[4].isEmpty ? null : args[4],
+    base64Decode(args[5]),
+  );
+}
+
+String _rustLibraryHomeJsonWorker(List<String> args) {
+  return RustCoreService._().libraryHomeJson(args[0]);
+}
+
+String _rustLibraryShowDetailJsonWorker(List<String> args) {
+  return RustCoreService._().libraryShowDetailJson(args[0], args[1]);
+}
+
+String _rustLibraryRecentJsonWorker(List<String> args) {
+  return RustCoreService._().libraryRecentJson(args[0]);
 }
 
 class RustScannedVideo {

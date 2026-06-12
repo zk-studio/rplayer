@@ -1,6 +1,6 @@
 part of 'package:player_flutter/main.dart';
 
-const currentMetadataSchemaVersion = 4;
+const currentMetadataSchemaVersion = 6;
 
 enum _TmdbEndpointKind { search, detail }
 
@@ -47,6 +47,106 @@ class TmdbMetadataService {
     return await _lookupMovie(item, queries) ?? await _lookupTv(item, queries);
   }
 
+  Future<Map<String, MediaMetadata>> lookupGroup(
+    MediaFolderGroup group, {
+    MediaMetadata? cachedTitle,
+  }) async {
+    final representative = group.representative;
+    if (!group.items.any(looksLikeSeriesItem) &&
+        representative.mediaKind != 'TvEpisode') {
+      final metadata = await lookup(representative);
+      return metadata == null ? {} : {representative.id: metadata};
+    }
+
+    if (cachedTitle != null &&
+        cachedTitle.mediaType == 'tv' &&
+        cachedTitle.tmdbId > 0) {
+      final result = await _lookupTvGroupFromCachedTitle(group, cachedTitle);
+      if (result.isNotEmpty) return result;
+    }
+
+    final tmdbId = group.items.map(explicitTmdbId).whereType<int>().firstOrNull;
+    final result = tmdbId == null
+        ? await _lookupTvGroup(group, _tvQueriesFor(representative))
+        : await _lookupTvGroupById(group, tmdbId);
+    if (result.isNotEmpty) return result;
+
+    final metadata = await lookup(representative);
+    return metadata == null ? {} : {representative.id: metadata};
+  }
+
+  Future<Map<String, MediaMetadata>> _lookupTvGroupFromCachedTitle(
+      MediaFolderGroup group, MediaMetadata cachedTitle) async {
+    final id = cachedTitle.tmdbId;
+    final seasons = <int, Map<String, dynamic>?>{};
+    for (final season
+        in group.items.map(inferredSeasonNumber).whereType<int>().toSet()) {
+      _log(
+          'GET /tv/$id/season/$season for new episodes, title cache="${cachedTitle.title}"');
+      seasons[season] = await _getSeasonJson(id, season, group.items);
+    }
+    return {
+      for (final item in group.items)
+        item.id: _tvMetadataFromCachedTitle(
+          item,
+          cachedTitle,
+          _episodeFromSeason(
+            seasons[inferredSeasonNumber(item)],
+            inferredEpisodeNumber(item),
+          ),
+        ),
+    };
+  }
+
+  Future<Map<String, MediaMetadata>> _lookupTvGroup(
+      MediaFolderGroup group, List<String> queries) async {
+    for (final query in queries) {
+      _log('GET /search/tv group="${group.title}" query="$query"');
+      final results = await _getJsonList(
+        '/search/tv',
+        {
+          'query': query,
+          if (group.representative.matchYear != null)
+            'first_air_date_year': '${group.representative.matchYear}',
+        },
+        kind: _TmdbEndpointKind.search,
+      );
+      final best =
+          _bestSearchResult(results, group.representative, movie: false);
+      final id = (best?['id'] as num?)?.toInt();
+      if (id == null) continue;
+      return _lookupTvGroupById(group, id);
+    }
+    return {};
+  }
+
+  Future<Map<String, MediaMetadata>> _lookupTvGroupById(
+      MediaFolderGroup group, int id) async {
+    _log('GET /tv/$id once for group="${group.title}"');
+    final details = await _getJson(
+      '/tv/$id',
+      {'append_to_response': 'images,aggregate_credits'},
+    );
+    final seasons = <int, Map<String, dynamic>?>{};
+    for (final season
+        in group.items.map(inferredSeasonNumber).whereType<int>().toSet()) {
+      _log('GET /tv/$id/season/$season once for group="${group.title}"');
+      seasons[season] = await _getSeasonJson(id, season, group.items);
+    }
+    return {
+      for (final item in group.items)
+        item.id: _tvMetadata(
+          item,
+          details,
+          seasons[inferredSeasonNumber(item)],
+          _episodeFromSeason(
+            seasons[inferredSeasonNumber(item)],
+            inferredEpisodeNumber(item),
+          ),
+        ),
+    };
+  }
+
   Future<MediaMetadata?> _lookupExplicitId(MediaItem item, int id) async {
     if (looksLikeSeriesItem(item)) {
       return await _lookupTvId(item, id) ?? await _lookupMovieId(item, id);
@@ -85,10 +185,7 @@ class TmdbMetadataService {
       final episode = inferredEpisodeNumber(item);
       if (season != null) {
         _log('GET /tv/$id/season/$season');
-        seasonDetails = await _getJsonOrNull(
-          '/tv/$id/season/$season',
-          const {},
-        );
+        seasonDetails = await _getSeasonJson(id, season, [item]);
         episodeDetails = _episodeFromSeason(seasonDetails, episode);
       }
       return _tvMetadata(item, details, seasonDetails, episodeDetails);
@@ -157,10 +254,7 @@ class TmdbMetadataService {
       final episode = inferredEpisodeNumber(item);
       if (season != null) {
         _log('GET /tv/$id/season/$season');
-        seasonDetails = await _getJsonOrNull(
-          '/tv/$id/season/$season',
-          const {},
-        );
+        seasonDetails = await _getSeasonJson(id, season, [item]);
         episodeDetails = _episodeFromSeason(seasonDetails, episode);
         _log(
             'season=$season episode=$episode still=${episodeDetails?['still_path']}');
@@ -291,6 +385,71 @@ class TmdbMetadataService {
         );
   }
 
+  Future<Map<String, dynamic>?> _getSeasonJson(
+      int tvId, int season, Iterable<MediaItem> localItems) async {
+    final localEpisodes =
+        localItems.map(inferredEpisodeNumber).whereType<int>().toSet();
+    final languages = <String>[
+      config.language,
+      'zh-CN',
+      'en-US',
+      '',
+    ].where((value) => value.trim().isNotEmpty).fold<List<String>>(
+      [],
+      (acc, value) {
+        if (!acc.contains(value)) acc.add(value);
+        return acc;
+      },
+    );
+    Map<String, dynamic>? fallback;
+    for (final language in languages) {
+      final json = await _getJsonOrNull(
+        '/tv/$tvId/season/$season',
+        {'language': language},
+      );
+      if (json == null) continue;
+      fallback ??= json;
+      final episodes = json['episodes'] as List<dynamic>? ?? const [];
+      final useful = episodes.whereType<Map<String, dynamic>>().any((episode) {
+        final number = (episode['episode_number'] as num?)?.toInt();
+        if (number == null || !localEpisodes.contains(number)) return false;
+        final name = (episode['name'] as String?)?.trim() ?? '';
+        final still = (episode['still_path'] as String?)?.trim() ?? '';
+        return name.isNotEmpty || still.isNotEmpty;
+      });
+      if (useful) return json;
+    }
+    return fallback;
+  }
+
+  MediaMetadata _tvMetadataFromCachedTitle(
+      MediaItem item, MediaMetadata title, Map<String, dynamic>? episodeJson) {
+    final episode = episodeJson?.isEmpty == true ? null : episodeJson;
+    return MediaMetadata(
+      itemId: item.id,
+      tmdbId: title.tmdbId,
+      mediaType: title.mediaType,
+      title: title.title,
+      originalTitle: title.originalTitle,
+      overview: title.overview,
+      posterPath: title.posterPath,
+      backdropPath: title.backdropPath,
+      stillPath: episode?['still_path'] as String?,
+      logoPath: title.logoPath,
+      profilePaths: title.profilePaths,
+      castNames: title.castNames,
+      genres: title.genres,
+      releaseDate: episode?['air_date'] as String? ?? title.releaseDate,
+      voteAverage:
+          (episode?['vote_average'] as num?)?.toDouble() ?? title.voteAverage,
+      totalSeasons: title.totalSeasons,
+      totalEpisodes: title.totalEpisodes,
+      episodeName: episode?['name'] as String?,
+      updatedAt: DateTime.now().millisecondsSinceEpoch,
+      schemaVersion: currentMetadataSchemaVersion,
+    );
+  }
+
   MediaMetadata _tvMetadata(MediaItem item, Map<String, dynamic> json,
       Map<String, dynamic>? seasonJson, Map<String, dynamic>? episodeJson) {
     final images = json['images'] as Map<String, dynamic>?;
@@ -304,7 +463,7 @@ class TmdbMetadataService {
           json['name'] as String? ??
           item.title,
       originalTitle: json['name'] as String?,
-      overview: episode?['overview'] as String? ?? json['overview'] as String?,
+      overview: json['overview'] as String?,
       posterPath: json['poster_path'] as String?,
       backdropPath: json['backdrop_path'] as String?,
       stillPath: episode?['still_path'] as String?,

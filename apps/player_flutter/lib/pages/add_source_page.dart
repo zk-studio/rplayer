@@ -51,20 +51,26 @@ class AddSourcePage extends StatelessWidget {
 }
 
 class WebdavSourceFormPage extends StatefulWidget {
-  const WebdavSourceFormPage({required this.store, super.key});
+  const WebdavSourceFormPage({required this.store, this.source, super.key});
 
   final AppStore store;
+  final MediaSourceConfig? source;
 
   @override
   State<WebdavSourceFormPage> createState() => _WebdavSourceFormPageState();
 }
 
 class _WebdavSourceFormPageState extends State<WebdavSourceFormPage> {
-  final name = TextEditingController(text: '我的 WebDAV');
-  final baseUrl = TextEditingController();
-  final username = TextEditingController();
-  final password = TextEditingController();
-  final directory = TextEditingController(text: '/');
+  late final name =
+      TextEditingController(text: widget.source?.name ?? '我的 WebDAV');
+  late final baseUrl =
+      TextEditingController(text: widget.source?.baseUrl ?? '');
+  late final username =
+      TextEditingController(text: widget.source?.username ?? '');
+  late final password =
+      TextEditingController(text: widget.source?.password ?? '');
+  late final directory =
+      TextEditingController(text: widget.source?.directory ?? '/');
   bool busy = false;
 
   @override
@@ -80,15 +86,21 @@ class _WebdavSourceFormPageState extends State<WebdavSourceFormPage> {
   Future<void> save() async {
     setState(() => busy = true);
     try {
-      final source = await widget.store.addWebdavSource(
-        WebdavSourceDraft(
-          name: name.text.trim(),
-          baseUrl: baseUrl.text.trim(),
-          username: username.text.trim(),
-          password: password.text,
-          directory: directory.text.trim(),
-        ),
+      final draft = WebdavSourceDraft(
+        name: name.text.trim(),
+        baseUrl: baseUrl.text.trim(),
+        username: username.text.trim(),
+        password: password.text,
+        directory: directory.text.trim(),
       );
+      final editing = widget.source;
+      if (editing != null) {
+        await widget.store.updateWebdavSource(editing, draft);
+        if (!mounted) return;
+        Navigator.pop(context);
+        return;
+      }
+      final source = await widget.store.addWebdavSource(draft);
       if (!mounted) return;
       Navigator.pushReplacement(
         context,
@@ -105,7 +117,9 @@ class _WebdavSourceFormPageState extends State<WebdavSourceFormPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('添加 WebDAV 源'), centerTitle: true),
+      appBar: AppBar(
+          title: Text(widget.source == null ? '添加 WebDAV 源' : '编辑 WebDAV 源'),
+          centerTitle: true),
       body: ListView(
         padding: const EdgeInsets.all(22),
         children: [
@@ -134,7 +148,7 @@ class _WebdavSourceFormPageState extends State<WebdavSourceFormPage> {
                     dimension: 18,
                     child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.check),
-            label: const Text('保存并选择内容'),
+            label: Text(widget.source == null ? '保存并选择内容' : '保存'),
           ),
         ],
       ),
@@ -246,50 +260,59 @@ class _WebdavBrowserPageState extends State<WebdavBrowserPage> {
                     onPressed: refresh, child: const Text('重新加载')),
               );
             }
-            return ListView(
-              children: [
-                if (path != widget.source.directory)
-                  ListTile(
+            final hasParent = path != widget.source.directory;
+            final selectedPaths = source.selectedPaths.toSet();
+            return ListView.builder(
+              itemExtent: 72,
+              cacheExtent: 1440,
+              itemCount: entries.length + (hasParent ? 1 : 0),
+              itemBuilder: (context, index) {
+                if (hasParent && index == 0) {
+                  return ListTile(
                     leading: const Icon(Icons.drive_folder_upload_outlined),
                     title: const Text('返回上级'),
                     onTap: goParent,
-                  ),
-                for (final entry in entries)
-                  ListTile(
-                    leading:
-                        Icon(entry.isDir ? Icons.folder : Icons.movie_outlined),
-                    title: Text(entry.name,
-                        maxLines: 1, overflow: TextOverflow.ellipsis),
-                    subtitle:
-                        Text(entry.isDir ? '文件夹' : readableBytes(entry.size)),
-                    trailing: isSelected(entry)
-                        ? IconButton(
-                            tooltip: entry.isDir ? '取消此文件夹' : '取消此视频',
-                            onPressed: adding ? null : () => removeEntry(entry),
-                            icon: const Icon(Icons.check_circle,
-                                color: Color(0xFF2E7AF6)),
-                          )
-                        : IconButton(
-                            tooltip: entry.isDir ? '添加此文件夹' : '添加此视频',
-                            onPressed: adding ||
-                                    (!entry.isDir && !isVideoName(entry.name))
-                                ? null
-                                : () => addEntry(entry),
-                            icon: const Icon(Icons.add_circle_outline),
-                          ),
-                    onTap: () {
-                      if (entry.isDir) {
-                        refresh(entry.path);
-                      } else if (isVideoName(entry.name)) {
-                        openPlayer(
-                            context,
-                            widget.store,
-                            MediaItem.webdav(
-                                source: widget.source, entry: entry));
-                      }
-                    },
-                  ),
-              ],
+                  );
+                }
+                final entry = entries[index - (hasParent ? 1 : 0)];
+                final entryPath =
+                    entry.isDir ? normalizeRemoteDir(entry.path) : entry.path;
+                final selected = selectedPaths.contains(entryPath);
+                return ListTile(
+                  leading:
+                      Icon(entry.isDir ? Icons.folder : Icons.movie_outlined),
+                  title: Text(entry.name,
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                  subtitle:
+                      Text(entry.isDir ? '文件夹' : readableBytes(entry.size)),
+                  trailing: selected
+                      ? IconButton(
+                          tooltip: entry.isDir ? '取消此文件夹' : '取消此视频',
+                          onPressed: adding ? null : () => removeEntry(entry),
+                          icon: const Icon(Icons.check_circle,
+                              color: Color(0xFF2E7AF6)),
+                        )
+                      : IconButton(
+                          tooltip: entry.isDir ? '添加此文件夹' : '添加此视频',
+                          onPressed: adding ||
+                                  (!entry.isDir && !isVideoName(entry.name))
+                              ? null
+                              : () => addEntry(entry),
+                          icon: const Icon(Icons.add_circle_outline),
+                        ),
+                  onTap: () {
+                    if (entry.isDir) {
+                      refresh(entry.path);
+                    } else if (isVideoName(entry.name)) {
+                      openPlayer(
+                          context,
+                          widget.store,
+                          MediaItem.webdav(
+                              source: widget.source, entry: entry));
+                    }
+                  },
+                );
+              },
             );
           },
         ),

@@ -7,13 +7,30 @@ class PlayerApp extends StatefulWidget {
   State<PlayerApp> createState() => _PlayerAppState();
 }
 
-class _PlayerAppState extends State<PlayerApp> {
+class _PlayerAppState extends State<PlayerApp> with WidgetsBindingObserver {
   final AppStore store = AppStore();
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     store.load();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    unawaited(store.save().catchError((_) {}));
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      unawaited(store.save().catchError((_) {}));
+    }
   }
 
   @override
@@ -25,7 +42,6 @@ class _PlayerAppState extends State<PlayerApp> {
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF2E7AF6)),
         scaffoldBackgroundColor: Colors.white,
         visualDensity: VisualDensity.compact,
-        textTheme: ThemeData.light().textTheme.apply(fontSizeFactor: 0.92),
         useMaterial3: true,
       ),
       home: AnimatedBuilder(

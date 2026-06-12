@@ -23,7 +23,11 @@ class MediaScanService {
     final file = File(path);
     if (await file.exists()) {
       if (isVideoName(path)) {
-        items.add(MediaItem.local(source: source, path: path));
+        items.add(MediaItem.local(
+          source: source,
+          path: path,
+          size: await file.length(),
+        ));
       }
       return items;
     }
@@ -32,7 +36,11 @@ class MediaScanService {
     if (!await dir.exists()) return [];
 
     return (await RustCoreService.instance.scanLocalVideosAsync(path))
-        .map((video) => MediaItem.local(source: source, path: video.path))
+        .map((video) => MediaItem.local(
+              source: source,
+              path: video.path,
+              size: video.size,
+            ))
         .toList();
   }
 

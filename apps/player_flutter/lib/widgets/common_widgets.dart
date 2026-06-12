@@ -26,6 +26,7 @@ class AppBrand extends StatelessWidget {
 class MediaTile extends StatelessWidget {
   const MediaTile(
       {required this.item,
+      required this.store,
       required this.metadata,
       required this.progressMs,
       required this.onTap,
@@ -34,6 +35,7 @@ class MediaTile extends StatelessWidget {
       super.key});
 
   final MediaItem item;
+  final AppStore store;
   final MediaMetadata? metadata;
   final int progressMs;
   final VoidCallback onTap;
@@ -43,7 +45,6 @@ class MediaTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final remote = item.type == SourceType.webdav;
-    final imageUrl = metadata?.posterUrl;
     final rating = metadata?.voteAverage;
     return InkWell(
       borderRadius: BorderRadius.circular(8),
@@ -58,12 +59,13 @@ class MediaTile extends StatelessWidget {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  if (imageUrl != null)
-                    Image.network(
-                      imageUrl,
+                  if (metadata?.posterPath != null)
+                    CachedTmdbImage(
+                      store: store,
+                      imagePath: metadata!.posterPath!,
+                      size: 'w500',
                       fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) =>
-                          MediaPosterFallback(remote: remote),
+                      fallback: MediaPosterFallback(remote: remote),
                     )
                   else
                     MediaPosterFallback(remote: remote),
@@ -114,6 +116,7 @@ class MediaTile extends StatelessWidget {
 class RecentMediaTile extends StatelessWidget {
   const RecentMediaTile({
     required this.item,
+    required this.store,
     required this.metadata,
     required this.progressMs,
     required this.durationMs,
@@ -124,6 +127,7 @@ class RecentMediaTile extends StatelessWidget {
   });
 
   final MediaItem item;
+  final AppStore store;
   final MediaMetadata? metadata;
   final int progressMs;
   final int durationMs;
@@ -140,7 +144,7 @@ class RecentMediaTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final remote = item.type == SourceType.webdav;
-    final imageUrl = metadata?.stillUrl ?? metadata?.backdropUrl;
+    final imagePath = metadata?.stillPath ?? metadata?.backdropPath;
     final hasTime = progressMs > 0 || durationMs > 0;
     final timeText = durationMs > 0
         ? '${formatDuration(Duration(milliseconds: progressMs))}/${formatDuration(Duration(milliseconds: durationMs))}'
@@ -158,12 +162,13 @@ class RecentMediaTile extends StatelessWidget {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  if (imageUrl != null)
-                    Image.network(
-                      imageUrl,
+                  if (imagePath != null)
+                    CachedTmdbImage(
+                      store: store,
+                      imagePath: imagePath,
+                      size: metadata?.stillPath != null ? 'w780' : 'w780',
                       fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) =>
-                          MediaPosterFallback(remote: remote),
+                      fallback: MediaPosterFallback(remote: remote),
                     )
                   else
                     MediaPosterFallback(remote: remote),
@@ -228,6 +233,69 @@ class RecentMediaTile extends StatelessWidget {
   }
 }
 
+class CachedTmdbImage extends StatefulWidget {
+  const CachedTmdbImage({
+    required this.store,
+    required this.imagePath,
+    required this.size,
+    required this.fit,
+    required this.fallback,
+    super.key,
+  });
+
+  final AppStore store;
+  final String imagePath;
+  final String size;
+  final BoxFit fit;
+  final Widget fallback;
+
+  @override
+  State<CachedTmdbImage> createState() => _CachedTmdbImageState();
+}
+
+class _CachedTmdbImageState extends State<CachedTmdbImage> {
+  late Future<Uint8List?> future;
+  late String key;
+
+  @override
+  void initState() {
+    super.initState();
+    key = _keyFor(widget.imagePath, widget.size);
+    future = widget.store.cachedTmdbImageBytes(widget.imagePath, widget.size);
+  }
+
+  @override
+  void didUpdateWidget(CachedTmdbImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final nextKey = _keyFor(widget.imagePath, widget.size);
+    if (nextKey != key || oldWidget.store != widget.store) {
+      key = nextKey;
+      future = widget.store.cachedTmdbImageBytes(widget.imagePath, widget.size);
+    }
+  }
+
+  String _keyFor(String imagePath, String size) => '$size:$imagePath';
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Uint8List?>(
+      future: future,
+      builder: (context, snapshot) {
+        final bytes = snapshot.data;
+        if (bytes != null && bytes.isNotEmpty) {
+          return Image.memory(
+            bytes,
+            fit: widget.fit,
+            gaplessPlayback: true,
+            errorBuilder: (_, __, ___) => widget.fallback,
+          );
+        }
+        return widget.fallback;
+      },
+    );
+  }
+}
+
 class MediaPosterFallback extends StatelessWidget {
   const MediaPosterFallback({required this.remote, super.key});
 
@@ -260,62 +328,70 @@ class SourceCard extends StatelessWidget {
       required this.count,
       required this.onOpen,
       required this.onDelete,
+      this.onEdit,
       super.key});
 
   final MediaSourceConfig source;
   final int count;
   final VoidCallback onOpen;
   final VoidCallback onDelete;
+  final VoidCallback? onEdit;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(22, 16, 12, 16),
-      decoration: BoxDecoration(
-          color: Colors.white, borderRadius: BorderRadius.circular(8)),
-      child: Row(
-        children: [
-          Container(
-            width: 46,
-            height: 38,
-            decoration: BoxDecoration(
-                color: const Color(0xFFDDE8FF),
-                borderRadius: BorderRadius.circular(6)),
-            child: Icon(
-                source.type == SourceType.local
-                    ? Icons.folder_special_outlined
-                    : Icons.cloud_queue,
-                color: const Color(0xFF2E7AF6)),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(source.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 16)),
-                const SizedBox(height: 5),
-                Text('${source.displayPath} · $count 个视频',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.grey)),
-              ],
-            ),
-          ),
-          PopupMenuButton<String>(
-            onSelected: (value) {
-              if (value == 'rescan') onOpen();
-              if (value == 'delete') onDelete();
-            },
-            itemBuilder: (_) => [
-              const PopupMenuItem(value: 'rescan', child: Text('管理内容')),
-              const PopupMenuItem(value: 'delete', child: Text('删除源')),
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(8),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: onOpen,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(22, 16, 8, 16),
+          child: Row(
+            children: [
+              Container(
+                width: 46,
+                height: 38,
+                decoration: BoxDecoration(
+                    color: const Color(0xFFDDE8FF),
+                    borderRadius: BorderRadius.circular(6)),
+                child: Icon(
+                    source.type == SourceType.local
+                        ? Icons.folder_special_outlined
+                        : Icons.cloud_queue,
+                    color: const Color(0xFF2E7AF6)),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(source.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 16)),
+                    const SizedBox(height: 5),
+                    Text('${source.displayPath} · $count 个视频',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.grey)),
+                  ],
+                ),
+              ),
+              PopupMenuButton<String>(
+                onSelected: (value) {
+                  if (value == 'edit') onEdit?.call();
+                  if (value == 'delete') onDelete();
+                },
+                itemBuilder: (_) => [
+                  if (onEdit != null)
+                    const PopupMenuItem(value: 'edit', child: Text('编辑源')),
+                  const PopupMenuItem(value: 'delete', child: Text('删除源')),
+                ],
+              ),
             ],
           ),
-          TextButton(onPressed: onOpen, child: const Text('浏览')),
-        ],
+        ),
       ),
     );
   }

@@ -7,127 +7,357 @@ class MediaLibraryPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final groups =
-        mediaFolderGroups(store.items, lastPlayedAt: store.lastPlayedAt);
-    final recentItems = store.items
-        .where((item) => store.lastPlayedAt.containsKey(item.id))
-        .toList()
-      ..sort((a, b) => (store.lastPlayedAt[b.id] ?? 0)
-          .compareTo(store.lastPlayedAt[a.id] ?? 0));
-
+    if (!store.loaded) {
+      return const SafeArea(
+        bottom: false,
+        child: Center(child: CircularProgressIndicator()),
+      );
+    }
     return SafeArea(
       bottom: false,
-      child: CustomScrollView(
-        slivers: [
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(22, 16, 22, 18),
-              child: Row(
+      child: FutureBuilder<_LibraryPageData>(
+        future: _loadLibraryPageData(store),
+        builder: (context, snapshot) {
+          final data = snapshot.data;
+          return CustomScrollView(
+            slivers: [
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(22, 16, 22, 18),
+                  child: Row(
+                    children: [
+                      const AppBrand(),
+                      const Spacer(),
+                      IconButton(
+                        tooltip: '刷新',
+                        onPressed: store.rescanAll,
+                        icon: const Icon(Icons.refresh, size: 26),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              if (snapshot.connectionState == ConnectionState.waiting)
+                const SliverFillRemaining(
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else if (data == null ||
+                  (data.home.isEmpty && store.items.isEmpty))
+                SliverFillRemaining(
+                  child: EmptyState(
+                    icon: Icons.video_library_outlined,
+                    title: '还没有视频',
+                    message: '请先到资源库添加本地目录或 WebDAV 目录源。',
+                    action: FilledButton.icon(
+                      onPressed: () => openAddSource(context, store),
+                      icon: const Icon(Icons.add),
+                      label: const Text('添加源'),
+                    ),
+                  ),
+                )
+              else if (data.home.isEmpty)
+                const SliverFillRemaining(
+                  child: EmptyState(
+                    icon: Icons.image_search_outlined,
+                    title: '等待 TMDB 匹配',
+                    message: '数据库里已有视频资源，但还没有可展示的 TMDB 剧集信息。',
+                    action: SizedBox.shrink(),
+                  ),
+                )
+              else ...[
+                if (data.recent.isNotEmpty) ...[
+                  SliverToBoxAdapter(
+                    child: SectionHeader(
+                      title: '最近播放',
+                      count: data.recent.length,
+                    ),
+                  ),
+                  SliverToBoxAdapter(
+                    child: SizedBox(
+                      height: 214,
+                      child: ListView.separated(
+                        padding: const EdgeInsets.symmetric(horizontal: 22),
+                        scrollDirection: Axis.horizontal,
+                        itemCount: math.min(data.recent.length, 12),
+                        separatorBuilder: (_, __) => const SizedBox(width: 14),
+                        itemBuilder: (context, index) {
+                          final recent = data.recent[index];
+                          final item = store.itemById(recent.legacyItemId);
+                          return SizedBox(
+                            width: 252,
+                            child: _RecentDbTile(
+                              store: store,
+                              recent: recent,
+                              onTap: item == null
+                                  ? null
+                                  : () => openPlayer(context, store, item),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                  const SliverToBoxAdapter(child: SizedBox(height: 24)),
+                ],
+                ..._libraryGridSection(
+                  context,
+                  store,
+                  '电视剧',
+                  data.home.where((entry) => entry.matched).toList(),
+                ),
+                ..._libraryGridSection(
+                  context,
+                  store,
+                  '其他',
+                  data.home.where((entry) => !entry.matched).toList(),
+                ),
+                const SliverToBoxAdapter(child: SizedBox(height: 24)),
+              ],
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  List<Widget> _libraryGridSection(
+    BuildContext context,
+    AppStore store,
+    String title,
+    List<LibraryHomeEntry> entries,
+  ) {
+    if (entries.isEmpty) return const [];
+    return [
+      SliverToBoxAdapter(
+        child: SectionHeader(title: title, count: entries.length),
+      ),
+      SliverPadding(
+        padding: const EdgeInsets.symmetric(horizontal: 22),
+        sliver: SliverGrid.builder(
+          itemCount: entries.length,
+          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: 126,
+            crossAxisSpacing: 18,
+            mainAxisSpacing: 22,
+            childAspectRatio: 0.42,
+          ),
+          itemBuilder: (context, index) {
+            final entry = entries[index];
+            return _LibraryDbTile(
+              store: store,
+              entry: entry,
+              onTap: () => openMediaGroupKey(
+                context,
+                store,
+                entry.folderKey,
+              ),
+            );
+          },
+        ),
+      ),
+    ];
+  }
+}
+
+class _LibraryPageData {
+  const _LibraryPageData({required this.home, required this.recent});
+
+  final List<LibraryHomeEntry> home;
+  final List<LibraryRecentEntry> recent;
+}
+
+Future<_LibraryPageData> _loadLibraryPageData(AppStore store) async {
+  final values = await Future.wait([
+    store.loadLibraryHome(),
+    store.loadLibraryRecent(),
+  ]);
+  return _LibraryPageData(
+    home: values[0] as List<LibraryHomeEntry>,
+    recent: values[1] as List<LibraryRecentEntry>,
+  );
+}
+
+class _LibraryDbTile extends StatelessWidget {
+  const _LibraryDbTile({
+    required this.store,
+    required this.entry,
+    required this.onTap,
+  });
+
+  final AppStore store;
+  final LibraryHomeEntry entry;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: onTap,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          AspectRatio(
+            aspectRatio: 2 / 3,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Stack(
+                fit: StackFit.expand,
                 children: [
-                  const AppBrand(),
-                  const Spacer(),
-                  IconButton(
-                    tooltip: '刷新',
-                    onPressed: store.rescanAll,
-                    icon: const Icon(Icons.refresh, size: 26),
+                  if (entry.posterPath != null)
+                    CachedTmdbImage(
+                      store: store,
+                      imagePath: entry.posterPath!,
+                      size: 'w500',
+                      fit: BoxFit.cover,
+                      fallback: const MediaPosterFallback(remote: false),
+                    )
+                  else
+                    const MediaPosterFallback(remote: false),
+                  if ((entry.voteAverage ?? 0) > 0)
+                    Positioned(
+                      right: 6,
+                      bottom: 6,
+                      child: Text(
+                        entry.voteAverage!.toStringAsFixed(1),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                          shadows: [Shadow(color: Colors.black, blurRadius: 8)],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 9),
+          Text(
+            entry.title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 14),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            '库中有 ${entry.localFileCount} 集',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: Colors.grey),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RecentDbTile extends StatelessWidget {
+  const _RecentDbTile({
+    required this.store,
+    required this.recent,
+    required this.onTap,
+  });
+
+  final AppStore store;
+  final LibraryRecentEntry recent;
+  final VoidCallback? onTap;
+
+  double get progressValue {
+    if (recent.positionMs <= 0) return 0;
+    final duration = recent.durationMs ?? 0;
+    if (duration <= 0) return 0.06;
+    return (recent.positionMs / duration).clamp(0.0, 1.0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final imagePath =
+        recent.stillPath ?? recent.backdropPath ?? recent.posterPath;
+    final hasTime = recent.positionMs > 0 || (recent.durationMs ?? 0) > 0;
+    final timeText = (recent.durationMs ?? 0) > 0
+        ? '${formatDuration(Duration(milliseconds: recent.positionMs))}/${formatDuration(Duration(milliseconds: recent.durationMs!))}'
+        : formatDuration(Duration(milliseconds: recent.positionMs));
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: onTap,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: SizedBox(
+              height: 142,
+              width: double.infinity,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (imagePath != null)
+                    CachedTmdbImage(
+                      store: store,
+                      imagePath: imagePath,
+                      size: imagePath == recent.posterPath ? 'w500' : 'w780',
+                      fit: BoxFit.cover,
+                      fallback: const MediaPosterFallback(remote: false),
+                    )
+                  else
+                    const MediaPosterFallback(remote: false),
+                  const Center(
+                    child: CircleAvatar(
+                      radius: 24,
+                      backgroundColor: Color(0xAA000000),
+                      child:
+                          Icon(Icons.play_arrow, color: Colors.white, size: 32),
+                    ),
+                  ),
+                  if (hasTime)
+                    Positioned(
+                      right: 6,
+                      bottom: 8,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: const Color(0xAA000000),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 3),
+                          child: Text(
+                            timeText,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: LinearProgressIndicator(
+                      minHeight: 3,
+                      value: progressValue,
+                      backgroundColor: const Color(0x66FFFFFF),
+                      color: const Color(0xFF2E7AF6),
+                    ),
                   ),
                 ],
               ),
             ),
           ),
-          if (!store.loaded)
-            const SliverFillRemaining(
-              child: Center(child: CircularProgressIndicator()),
-            )
-          else if (store.items.isEmpty)
-            SliverFillRemaining(
-              child: EmptyState(
-                icon: Icons.video_library_outlined,
-                title: '还没有视频',
-                message: '请先到资源库添加本地目录或 WebDAV 目录源。',
-                action: FilledButton.icon(
-                  onPressed: () => openAddSource(context, store),
-                  icon: const Icon(Icons.add),
-                  label: const Text('添加源'),
-                ),
-              ),
-            )
-          else ...[
-            if (recentItems.isNotEmpty) ...[
-              SliverToBoxAdapter(
-                child: SectionHeader(
-                  title: '最近播放',
-                  count: recentItems.length,
-                ),
-              ),
-              SliverToBoxAdapter(
-                child: SizedBox(
-                  height: 176,
-                  child: ListView.separated(
-                    padding: const EdgeInsets.symmetric(horizontal: 22),
-                    scrollDirection: Axis.horizontal,
-                    itemCount: math.min(recentItems.length, 12),
-                    separatorBuilder: (_, __) => const SizedBox(width: 14),
-                    itemBuilder: (context, index) {
-                      final item = recentItems[index];
-                      final group = groups.firstWhere(
-                        (group) => group.key == mediaFolderKey(item),
-                        orElse: () => MediaFolderGroup(
-                          key: mediaFolderKey(item),
-                          title: mediaGroupDisplayTitle(item),
-                          items: [item],
-                          representative: item,
-                          latestPlayedAt: store.lastPlayedAt[item.id] ?? 0,
-                        ),
-                      );
-                      final metadata = store.metadata[item.id];
-                      return SizedBox(
-                        width: 240,
-                        child: RecentMediaTile(
-                          item: item,
-                          metadata: metadata,
-                          progressMs: store.progress[item.id] ?? 0,
-                          durationMs: store.durations[item.id] ?? 0,
-                          displayTitle:
-                              recentMediaTitle(item, metadata, group.title),
-                          onTap: () => openPlayer(context, store, item),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ),
-              const SliverToBoxAdapter(child: SizedBox(height: 24)),
-            ],
-            SliverToBoxAdapter(
-              child: SectionHeader(title: '电视剧', count: groups.length),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 44,
+            child: Text(
+              recent.displayTitle,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w700, height: 1.35),
             ),
-            SliverPadding(
-              padding: const EdgeInsets.symmetric(horizontal: 22),
-              sliver: SliverGrid.builder(
-                itemCount: groups.length,
-                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                  maxCrossAxisExtent: 126,
-                  crossAxisSpacing: 18,
-                  mainAxisSpacing: 22,
-                  childAspectRatio: 0.48,
-                ),
-                itemBuilder: (context, index) {
-                  final group = groups[index];
-                  final item = group.representative;
-                  return MediaTile(
-                    item: item,
-                    metadata: mediaGroupMetadata(group, store.metadata),
-                    progressMs: 0,
-                    displayTitle: group.title,
-                    itemCount: group.items.length,
-                    onTap: () => openMediaGroup(context, store, group),
-                  );
-                },
-              ),
-            ),
-            const SliverToBoxAdapter(child: SizedBox(height: 24)),
-          ],
+          ),
         ],
       ),
     );
@@ -148,16 +378,17 @@ String recentMediaTitle(
 void openMediaGroup(
     BuildContext context, AppStore store, MediaFolderGroup group) {
   Navigator.of(context).push(
-    PageRouteBuilder<void>(
-      transitionDuration: Duration.zero,
-      reverseTransitionDuration: Duration.zero,
-      pageBuilder: (_, __, ___) =>
-          MediaGroupPage(store: store, groupKey: group.key),
-    ),
+    appSlideRoute((_) => MediaGroupPage(store: store, groupKey: group.key)),
   );
 }
 
-class MediaGroupPage extends StatelessWidget {
+void openMediaGroupKey(BuildContext context, AppStore store, String groupKey) {
+  Navigator.of(context).push(
+    appSlideRoute((_) => MediaGroupPage(store: store, groupKey: groupKey)),
+  );
+}
+
+class MediaGroupPage extends StatefulWidget {
   const MediaGroupPage(
       {required this.store, required this.groupKey, super.key});
 
@@ -165,8 +396,59 @@ class MediaGroupPage extends StatelessWidget {
   final String groupKey;
 
   @override
+  State<MediaGroupPage> createState() => _MediaGroupPageState();
+}
+
+class _MediaGroupPageState extends State<MediaGroupPage> {
+  late Future<LibraryShowDetail> future;
+  int revision = -1;
+
+  @override
+  void initState() {
+    super.initState();
+    revision = widget.store.metadataRevision;
+    future = widget.store.loadLibraryShowDetail(widget.groupKey);
+    widget.store.addListener(_storeChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.store.removeListener(_storeChanged);
+    super.dispose();
+  }
+
+  void _storeChanged() {
+    if (!mounted) return;
+    if (revision == widget.store.metadataRevision) return;
+    setState(() {
+      revision = widget.store.metadataRevision;
+      future = widget.store.loadLibraryShowDetail(widget.groupKey);
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final group = mediaFolderGroups(
+    return FutureBuilder<LibraryShowDetail>(
+      future: future,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            backgroundColor: Color(0xFF090B08),
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final detail = snapshot.data;
+        if (detail == null || detail.files.isEmpty) {
+          return Scaffold(
+            appBar: AppBar(),
+            body: const Center(child: Text('没有可播放的视频')),
+          );
+        }
+        return _MediaGroupDbBody(store: widget.store, detail: detail);
+      },
+    );
+
+    /* final group = mediaFolderGroups(
       store.items.where((item) => mediaFolderKey(item) == groupKey),
       lastPlayedAt: store.lastPlayedAt,
     ).firstOrNull;
@@ -178,97 +460,74 @@ class MediaGroupPage extends StatelessWidget {
       );
     }
 
-    final representative = group.representative;
     final metadata = mediaGroupMetadata(group, store.metadata);
     final title =
         metadata?.title.isNotEmpty == true ? metadata!.title : group.title;
-    final backdropUrl = metadata?.backdropUrl ?? metadata?.posterUrl;
-    final posterUrl = metadata?.posterUrl;
     final totalEpisodes = metadata?.totalEpisodes;
     final totalSeasons = metadata?.totalSeasons;
     final releaseDate = metadata?.releaseDate;
     final genres = metadata?.genres ?? const <String>[];
     final castNames = metadata?.castNames ?? const <String>[];
-    final firstPlayable = group.items.first;
-    final heroHeight =
-        (MediaQuery.sizeOf(context).height * 0.48).clamp(360.0, 440.0);
+    final profilePaths = metadata?.profilePaths ?? const <String>[];
+    final posterPath = metadata?.posterPath;
+    final backdropPath = metadata?.backdropPath;
+    final currentPlayable = currentGroupItem(group, store);
+    final currentEpisode = inferredEpisodeNumber(currentPlayable) ?? 1;
+    final currentProgressMs = store.progress[currentPlayable.id] ?? 0;
+    final currentDurationMs = store.durations[currentPlayable.id] ?? 0;
 
     return Scaffold(
       backgroundColor: const Color(0xFF090B08),
       body: CustomScrollView(
         slivers: [
           SliverToBoxAdapter(
-            child: SizedBox(
-              height: heroHeight,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  if (backdropUrl != null)
-                    Image.network(
-                      backdropUrl,
+            child: Stack(
+              children: [
+                if (backdropPath != null)
+                  Positioned.fill(
+                    child: CachedTmdbImage(
+                      store: store,
+                      imagePath: backdropPath,
+                      size: 'w780',
                       fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => MediaPosterFallback(
-                        remote: representative.type == SourceType.webdav,
-                      ),
-                    )
-                  else
-                    MediaPosterFallback(
-                      remote: representative.type == SourceType.webdav,
+                      fallback: const SizedBox.shrink(),
                     ),
-                  const DecoratedBox(
+                  ),
+                Positioned.fill(
+                  child: DecoratedBox(
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
                         begin: Alignment.topCenter,
                         end: Alignment.bottomCenter,
                         colors: [
-                          Color(0x66000000),
-                          Color(0x33000000),
-                          Color(0xFF090B08),
+                          Colors.black.withValues(alpha: 0.34),
+                          const Color(0xFF090B08).withValues(alpha: 0.78),
+                          const Color(0xFF090B08),
                         ],
+                        stops: const [0, 0.58, 1],
                       ),
                     ),
                   ),
-                  SafeArea(
-                    bottom: false,
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
-                      child: Align(
-                        alignment: Alignment.topLeft,
-                        child: IconButton(
-                          color: Colors.white,
-                          onPressed: () => Navigator.of(context).maybePop(),
-                          icon: const Icon(Icons.chevron_left, size: 30),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    left: 24,
-                    right: 24,
-                    bottom: 18,
+                ),
+                SafeArea(
+                  bottom: false,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(22, 8, 22, 34),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Row(
-                          crossAxisAlignment: CrossAxisAlignment.end,
                           children: [
-                            if (posterUrl != null)
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
-                                child: Image.network(
-                                  posterUrl,
-                                  width: 76,
-                                  height: 114,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, __, ___) =>
-                                      const SizedBox(),
-                                ),
-                              ),
-                            if (posterUrl != null) const SizedBox(width: 12),
+                            IconButton(
+                              color: Colors.white,
+                              onPressed: () => Navigator.of(context).maybePop(),
+                              icon: const Icon(Icons.chevron_left, size: 32),
+                            ),
                             Expanded(
                               child: Text(
                                 title,
-                                maxLines: 2,
+                                textAlign: TextAlign.center,
+                                maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(
                                   color: Colors.white,
@@ -277,54 +536,93 @@ class MediaGroupPage extends StatelessWidget {
                                 ),
                               ),
                             ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        Wrap(
-                          spacing: 10,
-                          runSpacing: 8,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            if ((metadata?.voteAverage ?? 0) > 0)
-                              _DarkMetaChip(
-                                icon: Icons.local_movies,
-                                label:
-                                    metadata!.voteAverage!.toStringAsFixed(1),
-                                accent: const Color(0xFF60D264),
-                              ),
-                            if (releaseDate?.isNotEmpty == true)
-                              _DarkMetaChip(
-                                icon: Icons.calendar_month_outlined,
-                                label: releaseDate!,
-                              ),
-                            if (totalEpisodes != null)
-                              _DarkTextChip(
-                                label:
-                                    '共 $totalEpisodes 集（库中有 ${group.items.length} 集）',
-                              )
-                            else
-                              _DarkTextChip(
-                                  label: '库中 ${group.items.length} 集'),
-                          ],
-                        ),
-                        if (genres.isNotEmpty) ...[
-                          const SizedBox(height: 12),
-                          Text(
-                            genres.join('  '),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+                            IconButton(
                               color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
+                              onPressed: () {},
+                              icon: const Icon(Icons.more_horiz, size: 30),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (posterPath != null) ...[
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: SizedBox(
+                                  width: 82,
+                                  height: 123,
+                                  child: CachedTmdbImage(
+                                    store: store,
+                                    imagePath: posterPath,
+                                    size: 'w500',
+                                    fit: BoxFit.cover,
+                                    fallback: const ColoredBox(
+                                      color: Color(0xFF252A22),
+                                      child: Icon(
+                                        Icons.movie_creation_outlined,
+                                        color: Colors.white70,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                            ],
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Wrap(
+                                    spacing: 10,
+                                    runSpacing: 8,
+                                    crossAxisAlignment:
+                                        WrapCrossAlignment.center,
+                                    children: [
+                                      if ((metadata?.voteAverage ?? 0) > 0)
+                                        _DarkMetaChip(
+                                          icon: Icons.local_movies,
+                                          label: metadata!.voteAverage!
+                                              .toStringAsFixed(1),
+                                          accent: const Color(0xFF60D264),
+                                        ),
+                                      if (releaseDate?.isNotEmpty == true)
+                                        _DarkMetaChip(
+                                          icon: Icons.calendar_month_outlined,
+                                          label: releaseDate!,
+                                        ),
+                                      _DarkTextChip(
+                                        label: totalEpisodes == null
+                                            ? '库中有 ${group.items.length} 集'
+                                            : '共 $totalEpisodes 集（库中有 ${group.items.length} 集）',
+                                      ),
+                                    ],
+                                  ),
+                                  if (genres.isNotEmpty) ...[
+                                    const SizedBox(height: 12),
+                                    Text(
+                                      genres.join('  '),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: Color(0xDDFFFFFF),
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 28),
                       ],
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
           SliverPadding(
@@ -341,10 +639,11 @@ class MediaGroupPage extends StatelessWidget {
                         borderRadius: BorderRadius.circular(6),
                       ),
                     ),
-                    onPressed: () => openPlayer(context, store, firstPlayable),
-                    icon: const Icon(Icons.play_arrow, size: 24),
+                    onPressed: () =>
+                        openPlayer(context, store, currentPlayable),
+                    icon: const Icon(Icons.play_arrow, size: 22),
                     label: Text(
-                      '第 ${inferredEpisodeNumber(firstPlayable) ?? 1} 集',
+                      playButtonLabel(currentEpisode, currentProgressMs),
                       style: const TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w800,
@@ -352,15 +651,15 @@ class MediaGroupPage extends StatelessWidget {
                     ),
                   ),
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 34),
                 Row(
                   children: [
                     Text(
                       '第 ${totalSeasons == null || totalSeasons <= 1 ? 1 : 1} 季',
                       style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 17,
-                        fontWeight: FontWeight.w800,
+                        fontSize: 23,
+                        fontWeight: FontWeight.w900,
                       ),
                     ),
                     const Icon(Icons.arrow_drop_down, color: Colors.white),
@@ -368,16 +667,15 @@ class MediaGroupPage extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Container(
-                  width: 90,
                   height: 3,
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 20),
                 SizedBox(
-                  height: 142,
+                  height: 154,
                   child: ListView.separated(
                     scrollDirection: Axis.horizontal,
                     itemCount: group.items.length,
@@ -388,6 +686,7 @@ class MediaGroupPage extends StatelessWidget {
                         width: 176,
                         child: _EpisodeCard(
                           item: item,
+                          store: store,
                           metadata: store.metadata[item.id] ?? metadata,
                           progressMs: store.progress[item.id] ?? 0,
                           durationMs: store.durations[item.id] ?? 0,
@@ -398,46 +697,634 @@ class MediaGroupPage extends StatelessWidget {
                   ),
                 ),
                 if (metadata?.overview?.isNotEmpty == true) ...[
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 28),
                   const _DarkSectionHeader(title: '剧情简介'),
                   const SizedBox(height: 12),
-                  Text(
-                    metadata!.overview!,
-                    maxLines: 6,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Color(0xDDFFFFFF),
-                      height: 1.55,
-                      fontSize: 13,
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 180),
+                    child: SingleChildScrollView(
+                      child: Text(
+                        metadata!.overview!,
+                        style: const TextStyle(
+                          color: Color(0xDDFFFFFF),
+                          height: 1.65,
+                          fontSize: 15,
+                        ),
+                      ),
                     ),
                   ),
                 ],
                 if (castNames.isNotEmpty) ...[
-                  const SizedBox(height: 22),
-                  Wrap(
-                    spacing: 18,
-                    runSpacing: 10,
-                    children: castNames
-                        .take(6)
-                        .map((name) => Text(
-                              name,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ))
-                        .toList(),
+                  const SizedBox(height: 30),
+                  const _DarkSectionHeader(title: '相关演员'),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    height: 130,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: math.min(castNames.length, 10),
+                      separatorBuilder: (_, __) => const SizedBox(width: 18),
+                      itemBuilder: (context, index) {
+                        return _ActorAvatar(
+                          store: store,
+                          name: castNames[index],
+                          imagePath: index < profilePaths.length
+                              ? profilePaths[index]
+                              : null,
+                        );
+                      },
+                    ),
                   ),
                 ],
-                const SizedBox(height: 22),
+                const SizedBox(height: 24),
                 const Divider(color: Color(0x22FFFFFF)),
-                const SizedBox(height: 14),
+                const SizedBox(height: 16),
                 Text(
-                  group.items.map((item) => item.title).join('\n'),
-                  style: const TextStyle(color: Color(0xCCFFFFFF), height: 1.8),
+                  currentPlayable.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xDDFFFFFF),
+                    fontSize: 15,
+                    height: 1.6,
+                  ),
+                ),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Text(
+                    itemFolderLine(currentPlayable),
+                    maxLines: 1,
+                    softWrap: false,
+                    style: const TextStyle(
+                      color: Color(0xDDFFFFFF),
+                      fontSize: 15,
+                      height: 1.6,
+                    ),
+                  ),
+                ),
+                Text(
+                  itemInfoLine(currentPlayable, currentDurationMs),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xDDFFFFFF),
+                    fontSize: 15,
+                    height: 1.6,
+                  ),
                 ),
               ]),
+            ),
+          ),
+        ],
+      ),
+    );
+    */
+  }
+}
+
+class _MediaGroupDbBody extends StatelessWidget {
+  const _MediaGroupDbBody({required this.store, required this.detail});
+
+  final AppStore store;
+  final LibraryShowDetail detail;
+
+  @override
+  Widget build(BuildContext context) {
+    final head = detail.representative!;
+    final current = detail.currentFile ?? head;
+    final currentItem = store.itemById(current.legacyItemId);
+    final title =
+        head.showTitle?.isNotEmpty == true ? head.showTitle! : current.filename;
+    final currentEpisode = current.displayEpisode ?? 1;
+    final currentProgressMs = current.positionMs ?? 0;
+    final currentDurationMs = current.durationMs ?? 0;
+    return Scaffold(
+      backgroundColor: const Color(0xFF090B08),
+      body: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(
+            child: Stack(
+              children: [
+                if (head.backdropPath != null)
+                  Positioned.fill(
+                    child: CachedTmdbImage(
+                      store: store,
+                      imagePath: head.backdropPath!,
+                      size: 'w780',
+                      fit: BoxFit.cover,
+                      fallback: const SizedBox.shrink(),
+                    ),
+                  ),
+                Positioned.fill(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.black.withValues(alpha: 0.34),
+                          const Color(0xFF090B08).withValues(alpha: 0.78),
+                          const Color(0xFF090B08),
+                        ],
+                        stops: const [0, 0.58, 1],
+                      ),
+                    ),
+                  ),
+                ),
+                SafeArea(
+                  bottom: false,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(22, 8, 22, 34),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            IconButton(
+                              color: Colors.white,
+                              onPressed: () => Navigator.of(context).maybePop(),
+                              icon: const Icon(Icons.chevron_left, size: 32),
+                            ),
+                            Expanded(
+                              child: Text(
+                                title,
+                                textAlign: TextAlign.center,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 21,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              color: Colors.white,
+                              onPressed: () {},
+                              icon: const Icon(Icons.more_horiz, size: 30),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (head.posterPath != null) ...[
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: SizedBox(
+                                  width: 82,
+                                  height: 123,
+                                  child: CachedTmdbImage(
+                                    store: store,
+                                    imagePath: head.posterPath!,
+                                    size: 'w500',
+                                    fit: BoxFit.cover,
+                                    fallback: const ColoredBox(
+                                      color: Color(0xFF252A22),
+                                      child: Icon(
+                                        Icons.movie_creation_outlined,
+                                        color: Colors.white70,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                            ],
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Wrap(
+                                    spacing: 10,
+                                    runSpacing: 8,
+                                    crossAxisAlignment:
+                                        WrapCrossAlignment.center,
+                                    children: [
+                                      if ((head.voteAverage ?? 0) > 0)
+                                        _DarkMetaChip(
+                                          icon: Icons.local_movies,
+                                          label: head.voteAverage!
+                                              .toStringAsFixed(1),
+                                          accent: const Color(0xFF60D264),
+                                        ),
+                                      if (head.releaseDate?.isNotEmpty == true)
+                                        _DarkMetaChip(
+                                          icon: Icons.calendar_month_outlined,
+                                          label: head.releaseDate!,
+                                        ),
+                                      _DarkTextChip(
+                                        label: head.totalEpisodes == null
+                                            ? '库中有 ${detail.files.length} 集'
+                                            : '共 ${head.totalEpisodes} 集（库中有 ${detail.files.length} 集）',
+                                      ),
+                                    ],
+                                  ),
+                                  if (detail.genres.isNotEmpty) ...[
+                                    const SizedBox(height: 12),
+                                    Text(
+                                      detail.genres.join('  '),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: Color(0xDDFFFFFF),
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 28),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(28, 0, 28, 34),
+            sliver: SliverList(
+              delegate: SliverChildListDelegate([
+                SizedBox(
+                  height: 46,
+                  child: FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: Colors.black,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                    ),
+                    onPressed: currentItem == null
+                        ? null
+                        : () => openPlayer(context, store, currentItem),
+                    icon: const Icon(Icons.play_arrow, size: 22),
+                    label: Text(
+                      playButtonLabel(currentEpisode, currentProgressMs),
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 34),
+                Row(
+                  children: [
+                    Text(
+                      '第 ${current.displaySeason ?? 1} 季',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 23,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const Icon(Icons.arrow_drop_down, color: Colors.white),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  height: 3,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  height: 154,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: detail.files.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 12),
+                    itemBuilder: (context, index) {
+                      final file = detail.files[index];
+                      final item = store.itemById(file.legacyItemId);
+                      return SizedBox(
+                        width: 176,
+                        child: _EpisodeDbCard(
+                          file: file,
+                          store: store,
+                          onTap: item == null
+                              ? null
+                              : () => openPlayer(context, store, item),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                if (head.showOverview?.isNotEmpty == true) ...[
+                  const SizedBox(height: 28),
+                  const _DarkSectionHeader(title: '剧情简介'),
+                  const SizedBox(height: 12),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 180),
+                    child: SingleChildScrollView(
+                      child: Text(
+                        head.showOverview!,
+                        style: const TextStyle(
+                          color: Color(0xDDFFFFFF),
+                          height: 1.65,
+                          fontSize: 15,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+                if (detail.castNames.isNotEmpty) ...[
+                  const SizedBox(height: 30),
+                  const _DarkSectionHeader(title: '相关演员'),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    height: 130,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: math.min(detail.castNames.length, 10),
+                      separatorBuilder: (_, __) => const SizedBox(width: 18),
+                      itemBuilder: (context, index) {
+                        return _ActorAvatar(
+                          store: store,
+                          name: detail.castNames[index],
+                          imagePath: index < detail.profilePaths.length
+                              ? detail.profilePaths[index]
+                              : null,
+                        );
+                      },
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 24),
+                const Divider(color: Color(0x22FFFFFF)),
+                const SizedBox(height: 16),
+                Text(
+                  current.filename,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xDDFFFFFF),
+                    fontSize: 15,
+                    height: 1.6,
+                  ),
+                ),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Text(
+                    currentItem == null
+                        ? current.relativePath
+                        : itemFolderLine(currentItem),
+                    maxLines: 1,
+                    softWrap: false,
+                    style: const TextStyle(
+                      color: Color(0xDDFFFFFF),
+                      fontSize: 15,
+                      height: 1.6,
+                    ),
+                  ),
+                ),
+                Text(
+                  dbItemInfoLine(current, currentDurationMs),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xDDFFFFFF),
+                    fontSize: 15,
+                    height: 1.6,
+                  ),
+                ),
+              ]),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ActorAvatar extends StatelessWidget {
+  const _ActorAvatar({
+    required this.store,
+    required this.name,
+    required this.imagePath,
+  });
+
+  final AppStore store;
+  final String name;
+  final String? imagePath;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 76,
+      child: Column(
+        children: [
+          ClipOval(
+            child: SizedBox(
+              width: 72,
+              height: 72,
+              child: imagePath == null
+                  ? const ColoredBox(
+                      color: Color(0xFF252A22),
+                      child: Icon(Icons.person, color: Colors.white70),
+                    )
+                  : CachedTmdbImage(
+                      store: store,
+                      imagePath: imagePath!,
+                      size: 'w185',
+                      fit: BoxFit.cover,
+                      fallback: const ColoredBox(
+                        color: Color(0xFF252A22),
+                        child: Icon(Icons.person, color: Colors.white70),
+                      ),
+                    ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            name,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+MediaItem currentGroupItem(MediaFolderGroup group, AppStore store) {
+  final withHistory = group.items
+      .where((item) => (store.lastPlayedAt[item.id] ?? 0) > 0)
+      .toList();
+  if (withHistory.isNotEmpty) {
+    return withHistory.reduce((a, b) =>
+        (store.lastPlayedAt[a.id] ?? 0) >= (store.lastPlayedAt[b.id] ?? 0)
+            ? a
+            : b);
+  }
+  final withProgress =
+      group.items.where((item) => (store.progress[item.id] ?? 0) > 0);
+  if (withProgress.isNotEmpty) {
+    return withProgress.reduce((a, b) =>
+        (store.progress[a.id] ?? 0) >= (store.progress[b.id] ?? 0) ? a : b);
+  }
+  return group.items.first;
+}
+
+String playButtonLabel(int episode, int progressMs) {
+  final prefix = '第 $episode 集';
+  if (progressMs <= 0) return prefix;
+  return '$prefix ${formatDuration(Duration(milliseconds: progressMs))}';
+}
+
+String itemFolderLine(MediaItem item) {
+  if (item.type == SourceType.webdav) {
+    final uri = Uri.tryParse(item.uri);
+    final path = uri == null ? item.uri : Uri.decodeComponent(uri.path);
+    return 'WebDAV: ${item.sourceName} - ${parentPath(path)}';
+  }
+  return '本地: ${item.sourceName} - ${p.dirname(item.uri)}';
+}
+
+String itemInfoLine(MediaItem item, int durationMs) {
+  final values = <String>[
+    durationMs > 0
+        ? '总时长 ${formatDuration(Duration(milliseconds: durationMs))}'
+        : '总时长未知',
+    readableBytes(item.size),
+  ];
+  return values.join('  ');
+}
+
+String dbItemInfoLine(LibraryFileEntry file, int durationMs) {
+  final values = <String>[
+    durationMs > 0
+        ? '总时长 ${formatDuration(Duration(milliseconds: durationMs))}'
+        : '总时长未知',
+    readableBytes(file.size),
+  ];
+  return values.join('  ');
+}
+
+class _EpisodeDbCard extends StatelessWidget {
+  const _EpisodeDbCard({
+    required this.file,
+    required this.store,
+    required this.onTap,
+  });
+
+  final LibraryFileEntry file;
+  final AppStore store;
+  final VoidCallback? onTap;
+
+  double get progressValue {
+    final progress = file.positionMs ?? 0;
+    if (progress <= 0) return 0;
+    final duration = file.durationMs ?? 0;
+    if (duration <= 0) return 0.06;
+    return (progress / duration).clamp(0.0, 1.0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final imagePath = file.stillPath ?? file.backdropPath;
+    final progress = file.positionMs ?? 0;
+    final duration = file.durationMs ?? 0;
+    final hasTime = progress > 0 || duration > 0;
+    final timeText = duration > 0
+        ? '${formatDuration(Duration(milliseconds: progress))}/${formatDuration(Duration(milliseconds: duration))}'
+        : formatDuration(Duration(milliseconds: progress));
+    final episode = file.displayEpisode;
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: onTap,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: AspectRatio(
+              aspectRatio: 16 / 9,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (imagePath != null)
+                    CachedTmdbImage(
+                      store: store,
+                      imagePath: imagePath,
+                      size: 'w780',
+                      fit: BoxFit.cover,
+                      fallback: const MediaPosterFallback(remote: false),
+                    )
+                  else
+                    const MediaPosterFallback(remote: false),
+                  const Center(
+                    child: CircleAvatar(
+                      radius: 15,
+                      backgroundColor: Color(0xAA000000),
+                      child:
+                          Icon(Icons.play_arrow, color: Colors.white, size: 20),
+                    ),
+                  ),
+                  if (hasTime)
+                    Positioned(
+                      right: 6,
+                      bottom: 8,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: const Color(0xAA000000),
+                          borderRadius: BorderRadius.circular(5),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 5, vertical: 2),
+                          child: Text(
+                            timeText,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: LinearProgressIndicator(
+                      minHeight: 3,
+                      value: progressValue,
+                      backgroundColor: const Color(0x66FFFFFF),
+                      color: const Color(0xFF2E7AF6),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 7),
+          Text(
+            episode == null
+                ? file.displayTitle
+                : '$episode. ${file.displayTitle}',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
             ),
           ),
         ],
@@ -513,9 +1400,11 @@ class _DarkSectionHeader extends StatelessWidget {
   }
 }
 
+// ignore: unused_element
 class _EpisodeCard extends StatelessWidget {
   const _EpisodeCard({
     required this.item,
+    required this.store,
     required this.metadata,
     required this.progressMs,
     required this.durationMs,
@@ -523,6 +1412,7 @@ class _EpisodeCard extends StatelessWidget {
   });
 
   final MediaItem item;
+  final AppStore store;
   final MediaMetadata? metadata;
   final int progressMs;
   final int durationMs;
@@ -536,8 +1426,12 @@ class _EpisodeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final imageUrl = metadata?.stillUrl ?? metadata?.backdropUrl;
+    final imagePath = metadata?.stillPath ?? metadata?.backdropPath;
     final episode = inferredEpisodeNumber(item);
+    final hasTime = progressMs > 0 || durationMs > 0;
+    final timeText = durationMs > 0
+        ? '${formatDuration(Duration(milliseconds: progressMs))}/${formatDuration(Duration(milliseconds: durationMs))}'
+        : formatDuration(Duration(milliseconds: progressMs));
     final episodeTitle = metadata?.episodeName?.isNotEmpty == true
         ? metadata!.episodeName!
         : item.title;
@@ -554,11 +1448,13 @@ class _EpisodeCard extends StatelessWidget {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  if (imageUrl != null)
-                    Image.network(
-                      imageUrl,
+                  if (imagePath != null)
+                    CachedTmdbImage(
+                      store: store,
+                      imagePath: imagePath,
+                      size: 'w780',
                       fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => MediaPosterFallback(
+                      fallback: MediaPosterFallback(
                           remote: item.type == SourceType.webdav),
                     )
                   else
@@ -571,6 +1467,29 @@ class _EpisodeCard extends StatelessWidget {
                           Icon(Icons.play_arrow, color: Colors.white, size: 20),
                     ),
                   ),
+                  if (hasTime)
+                    Positioned(
+                      right: 6,
+                      bottom: 8,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: const Color(0xAA000000),
+                          borderRadius: BorderRadius.circular(5),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 5, vertical: 2),
+                          child: Text(
+                            timeText,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                   Positioned(
                     left: 0,
                     right: 0,

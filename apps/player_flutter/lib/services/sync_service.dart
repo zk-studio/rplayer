@@ -97,21 +97,27 @@ Future<void> uploadState(BuildContext context, AppStore store) async {
   final config = store.syncConfig;
   if (config == null) return showSnack(context, '请先设置同步 WebDAV');
   try {
+    store.addDiagnosticLog('sync upload started');
     final client = WebdavClient.fromSync(config);
     if (config.syncConfigFile) {
       await client.ensureParentCollections(config.configPath);
-      await client.putText(config.configPath, store.exportState());
+      await client.putText(config.configPath, store.exportSettings());
+      store.addDiagnosticLog('sync uploaded settings: ${config.configPath}');
     }
     if (config.syncDatabase) {
+      await store.saveMediaStateDatabase();
       await store.replaceMetadataDatabase();
       final db = await store.metadataDatabaseFile;
       if (await db.exists()) {
         await client.ensureParentCollections(config.databasePath);
         await client.putBytes(config.databasePath, await db.readAsBytes());
+        store
+            .addDiagnosticLog('sync uploaded database: ${config.databasePath}');
       }
     }
     if (context.mounted) showSnack(context, '同步已上传');
   } catch (e) {
+    store.addDiagnosticLog('sync upload failed: $e');
     if (context.mounted) showSnack(context, '上传失败：$e');
   }
 }
@@ -120,19 +126,24 @@ Future<void> downloadState(BuildContext context, AppStore store) async {
   final config = store.syncConfig;
   if (config == null) return showSnack(context, '请先设置同步 WebDAV');
   try {
+    store.addDiagnosticLog('sync download started');
     final client = WebdavClient.fromSync(config);
     if (config.syncConfigFile) {
       final text = await client.getText(config.configPath);
       await store.importState(text);
+      store.addDiagnosticLog('sync downloaded settings: ${config.configPath}');
     }
     if (config.syncDatabase) {
       final bytes = await client.getBytes(config.databasePath);
       final db = await store.metadataDatabaseFile;
       await db.writeAsBytes(bytes, flush: true);
-      await store.loadMetadataDatabase();
+      await store.reloadDatabaseBackedState();
+      store
+          .addDiagnosticLog('sync downloaded database: ${config.databasePath}');
     }
     if (context.mounted) showSnack(context, '同步已恢复');
   } catch (e) {
+    store.addDiagnosticLog('sync download failed: $e');
     if (context.mounted) showSnack(context, '下载失败：$e');
   }
 }
@@ -143,30 +154,39 @@ void openAddSource(BuildContext context, AppStore store) {
 
 Route<T> appSlideRoute<T>(WidgetBuilder builder) {
   return PageRouteBuilder<T>(
-    transitionDuration: const Duration(milliseconds: 260),
-    reverseTransitionDuration: const Duration(milliseconds: 220),
+    transitionDuration: const Duration(milliseconds: 130),
+    reverseTransitionDuration: const Duration(milliseconds: 130),
     pageBuilder: (context, animation, secondaryAnimation) => builder(context),
     transitionsBuilder: (context, animation, secondaryAnimation, child) {
       final curved = CurvedAnimation(
         parent: animation,
-        curve: Curves.easeOutCubic,
-        reverseCurve: Curves.easeInCubic,
+        curve: Curves.linear,
+        reverseCurve: Curves.linear,
       );
       return SlideTransition(
         position: Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero)
             .animate(curved),
-        child: DecoratedBox(
-          decoration: const BoxDecoration(
-            boxShadow: [
-              BoxShadow(
-                color: Color(0x33000000),
-                blurRadius: 22,
-                offset: Offset(-8, 0),
-              ),
-            ],
-          ),
-          child: child,
-        ),
+        child: child,
+      );
+    },
+  );
+}
+
+Route<T> overlapSlideRoute<T>(WidgetBuilder builder) {
+  return PageRouteBuilder<T>(
+    transitionDuration: const Duration(milliseconds: 120),
+    reverseTransitionDuration: const Duration(milliseconds: 120),
+    pageBuilder: (context, animation, secondaryAnimation) => builder(context),
+    transitionsBuilder: (context, animation, secondaryAnimation, child) {
+      final curved = CurvedAnimation(
+        parent: animation,
+        curve: Curves.linear,
+        reverseCurve: Curves.linear,
+      );
+      return SlideTransition(
+        position: Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero)
+            .animate(curved),
+        child: child,
       );
     },
   );

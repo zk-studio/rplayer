@@ -10,7 +10,11 @@ use std::os::raw::c_char;
 
 pub use danmu::{DanmuClient, DanmuEvent, DanmuMatchRequest};
 pub use media::{parse_media_identity, MediaIdentity, MediaKind};
-pub use metadata_cache::{get_all_metadata_json, put_metadata_json, replace_all_metadata_json};
+pub use metadata_cache::{
+    cache_images_json, get_all_metadata_json, get_app_state_json, get_cached_image_json,
+    prune_metadata_json, put_app_state_json, put_cached_image_json, put_metadata_json,
+    query_home_json, query_recent_json, query_show_detail_json, replace_all_metadata_json,
+};
 pub use scanner::{
     list_local_directory, list_local_directory_json, scan_local_videos, scan_local_videos_json,
     LocalDirectoryEntry, ScannedVideo,
@@ -95,14 +99,34 @@ pub extern "C" fn player_core_tmdb_get_json(
 #[no_mangle]
 pub extern "C" fn player_core_metadata_put_json(
     db_path: *const c_char,
+    title_key: *const c_char,
     item_id: *const c_char,
     metadata_json: *const c_char,
 ) -> *mut c_char {
     ffi_result(|| {
         let db_path = read_c_string(db_path)?;
+        let title_key = read_c_string(title_key)?;
         let item_id = read_c_string(item_id)?;
         let metadata_json = read_c_string(metadata_json)?;
-        put_metadata_json(&db_path, &item_id, &metadata_json)?;
+        put_metadata_json(&db_path, &title_key, &item_id, &metadata_json)?;
+        Ok("{}".to_string())
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn player_core_metadata_cache_images_json(
+    db_path: *const c_char,
+    metadata_json: *const c_char,
+    proxy_url: *const c_char,
+) -> *mut c_char {
+    ffi_result(|| {
+        let db_path = read_c_string(db_path)?;
+        let metadata_json = read_c_string(metadata_json)?;
+        let proxy_url = read_c_string(proxy_url)?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        runtime.block_on(cache_images_json(&db_path, &metadata_json, &proxy_url))?;
         Ok("{}".to_string())
     })
 }
@@ -116,6 +140,69 @@ pub extern "C" fn player_core_metadata_get_all_json(db_path: *const c_char) -> *
 }
 
 #[no_mangle]
+pub extern "C" fn player_core_app_state_get_json(db_path: *const c_char) -> *mut c_char {
+    ffi_result(|| {
+        let db_path = read_c_string(db_path)?;
+        get_app_state_json(&db_path)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn player_core_app_state_put_json(
+    db_path: *const c_char,
+    state_json: *const c_char,
+) -> *mut c_char {
+    ffi_result(|| {
+        let db_path = read_c_string(db_path)?;
+        let state_json = read_c_string(state_json)?;
+        put_app_state_json(&db_path, &state_json)?;
+        Ok("{}".to_string())
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn player_core_metadata_cached_image_json(
+    db_path: *const c_char,
+    image_path: *const c_char,
+    size: *const c_char,
+) -> *mut c_char {
+    ffi_result(|| {
+        let db_path = read_c_string(db_path)?;
+        let image_path = read_c_string(image_path)?;
+        let size = read_c_string(size)?;
+        get_cached_image_json(&db_path, &image_path, &size)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn player_core_metadata_put_cached_image_json(
+    db_path: *const c_char,
+    image_json: *const c_char,
+) -> *mut c_char {
+    ffi_result(|| {
+        let db_path = read_c_string(db_path)?;
+        let image_json = read_c_string(image_json)?;
+        put_cached_image_json(&db_path, &image_json)?;
+        Ok("{}".to_string())
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn player_core_metadata_prune_json(
+    db_path: *const c_char,
+    live_item_ids_json: *const c_char,
+    live_title_keys_json: *const c_char,
+) -> *mut c_char {
+    ffi_result(|| {
+        let db_path = read_c_string(db_path)?;
+        let live_item_ids_json = read_c_string(live_item_ids_json)?;
+        let live_title_keys_json = read_c_string(live_title_keys_json)?;
+        prune_metadata_json(&db_path, &live_item_ids_json, &live_title_keys_json)?;
+        Ok("{}".to_string())
+    })
+}
+
+#[no_mangle]
 pub extern "C" fn player_core_metadata_replace_all_json(
     db_path: *const c_char,
     metadata_map_json: *const c_char,
@@ -125,6 +212,34 @@ pub extern "C" fn player_core_metadata_replace_all_json(
         let metadata_map_json = read_c_string(metadata_map_json)?;
         replace_all_metadata_json(&db_path, &metadata_map_json)?;
         Ok("{}".to_string())
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn player_core_library_home_json(db_path: *const c_char) -> *mut c_char {
+    ffi_result(|| {
+        let db_path = read_c_string(db_path)?;
+        query_home_json(&db_path)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn player_core_library_show_detail_json(
+    db_path: *const c_char,
+    folder_key: *const c_char,
+) -> *mut c_char {
+    ffi_result(|| {
+        let db_path = read_c_string(db_path)?;
+        let folder_key = read_c_string(folder_key)?;
+        query_show_detail_json(&db_path, &folder_key)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn player_core_library_recent_json(db_path: *const c_char) -> *mut c_char {
+    ffi_result(|| {
+        let db_path = read_c_string(db_path)?;
+        query_recent_json(&db_path)
     })
 }
 

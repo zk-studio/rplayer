@@ -1,0 +1,12 @@
+# .understandignore - patterns for files/dirs to exclude from analysis
+node_modules/
+.git/
+target/
+build/
+.dart_tool/
+.flutter-plugins
+*.lock
+*.png
+*.so
+*.dll
+*.dylib

@@ -23,6 +23,16 @@ class SourceLibraryPage extends StatelessWidget {
                 : LocalBrowserPage(store: store, source: source),
           ),
         ),
+        onEdit: source.type == SourceType.webdav
+            ? () => Navigator.of(context).push(
+                  appSlideRoute(
+                    (_) => WebdavSourceFormPage(
+                      store: store,
+                      source: source,
+                    ),
+                  ),
+                )
+            : null,
         onDelete: () => store.removeSource(source),
       ),
     );
