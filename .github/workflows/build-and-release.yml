@@ -4,11 +4,15 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - 'website/**'
     tags:
       - 'v*'
   pull_request:
     branches:
       - main
+    paths-ignore:
+      - 'website/**'
 
 jobs:
   build-and-release:
