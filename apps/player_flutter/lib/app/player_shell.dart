@@ -1,4 +1,4 @@
-﻿part of 'package:player_flutter/main.dart';
+part of 'package:player_flutter/main.dart';
 
 class PlayerShell extends StatefulWidget {
   const PlayerShell({required this.store, super.key});
@@ -11,6 +11,21 @@ class PlayerShell extends StatefulWidget {
 
 class _PlayerShellState extends State<PlayerShell> {
   int index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkUpdatesSilently();
+    });
+  }
+
+  Future<void> _checkUpdatesSilently() async {
+    final info = await UpdateService.checkForUpdates();
+    if (info != null && mounted) {
+      UpdateService.showUpdateDialog(context, info);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

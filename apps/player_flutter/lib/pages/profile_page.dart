@@ -74,6 +74,36 @@ class ProfilePage extends StatelessWidget {
                     appSlideRoute((_) => SyncSettingsPage(store: store)),
                   ),
                 ),
+                FutureBuilder<PackageInfo>(
+                  future: PackageInfo.fromPlatform(),
+                  builder: (context, snapshot) {
+                    final version = snapshot.data?.version ?? '...';
+                    return ProfileActionCard(
+                      icon: Icons.system_update_alt_outlined,
+                      title: '检查更新',
+                      subtitle: '当前版本: v$version',
+                      actionText: '检查',
+                      onTap: () async {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('正在检查更新...'),
+                            duration: Duration(seconds: 1),
+                          ),
+                        );
+                        final info = await UpdateService.checkForUpdates();
+                        if (context.mounted) {
+                          if (info != null) {
+                            UpdateService.showUpdateDialog(context, info);
+                          } else {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('已经是最新版本')),
+                            );
+                          }
+                        }
+                      },
+                    );
+                  },
+                ),
               ],
             ),
           ),

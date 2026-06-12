@@ -16,6 +16,8 @@ import 'package:path/path.dart' as p;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:xml/xml.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:player_flutter/services/update_service.dart';
 
 part 'app/player_app.dart';
 part 'store/app_store.dart';
